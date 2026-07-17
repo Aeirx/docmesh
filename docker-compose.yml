@@ -1,0 +1,20 @@
+# Two services only — the point of DocMesh's stack choice is that SQLite + FAISS +
+# in-process workers need no orchestration. See ARCHITECTURE.md.
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # DB, uploads, and vector index live on the host so `docker compose down` loses nothing
+      - ./data:/app/data
+    env_file:
+      - path: .env
+        required: false
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
