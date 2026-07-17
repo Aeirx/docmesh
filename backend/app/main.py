@@ -11,17 +11,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import documents, health
+from app.api.routes import documents, events, health, search
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
+from app.ingestion.broker import StatusBroker
+from app.ingestion.queue import IngestionQueue, PipelineDeps
 from app.ingestion.validators import UploadValidationError
 from app.schemas.common import ErrorResponse
+from app.schemas.documents import DocumentStatus
+from app.search.bm25 import BM25Index
+
+# Imported as names (not called) so the fast-tier tests can monkeypatch
+# app.main.DenseEmbedder / app.main.Reranker with fakes before the app builds.
+# Cheap imports: both classes lazy-load torch inside their loaders.
+from app.search.embedder import DenseEmbedder
+from app.search.reranker import Reranker
 from app.services.document_service import DuplicateDocumentError
 from app.storage.database import create_db_engine
 from app.storage.sql.chunk_repo import SqlChunkRepository
 from app.storage.sql.document_repo import SqlDocumentRepository
 from app.storage.sql.event_repo import SqlIngestionEventRepository
+from app.storage.vector.faiss_store import FaissVectorStore
 
 logger = get_logger(__name__)
 
@@ -71,13 +82,102 @@ def create_app() -> FastAPI:
         engine = create_db_engine(settings.database_url)
         app.state.settings = settings
         app.state.engine = engine
-        app.state.document_repo = SqlDocumentRepository(engine)
-        app.state.chunk_repo = SqlChunkRepository(engine)
-        app.state.event_repo = SqlIngestionEventRepository(engine)
-        logger.info("startup_complete", env=settings.env, database_url=settings.database_url)
+        doc_repo = app.state.document_repo = SqlDocumentRepository(engine)
+        chunk_repo = app.state.chunk_repo = SqlChunkRepository(engine)
+        event_repo = app.state.event_repo = SqlIngestionEventRepository(engine)
+
+        # Models: construction only — nothing loads until first use (lazy
+        # singletons), so startup stays instant unless warm_models is set.
+        embedder = app.state.embedder = DenseEmbedder(
+            settings.search.dense_model, settings.search.embed_batch_size
+        )
+        reranker = app.state.reranker = Reranker(
+            settings.search.rerank_model, settings.search.rerank_batch_size
+        )
+        if settings.ingestion.warm_models:
+            await asyncio.to_thread(embedder._get_model)
+            await asyncio.to_thread(reranker._get_model)
+
+        # FAISS: hydrate from the index file, id mappings from SQL (the truth).
+        vector_store = app.state.vector_store = FaissVectorStore(settings.faiss_index_path)
+        rows = await chunk_repo.list_non_duplicates()
+        mapped = [(c.vector_id, c.id, c.document_id) for c in rows if c.vector_id is not None]
+        await vector_store.load(mapped)
+        if await vector_store.count() != len(mapped):
+            # Index file lost/corrupt/stale. Vectors exist ONLY in FAISS, so
+            # re-embedding is the only honest recovery: clear the index, reset
+            # every 'done' document to 'queued' (chunks wiped), and let the
+            # uniform recovery sweep below re-ingest from the stored files.
+            logger.warning(
+                "faiss_reconcile_reset",
+                index_count=await vector_store.count(),
+                sql_count=len(mapped),
+            )
+            await vector_store.reset()
+            done_docs, _ = await doc_repo.list(status=DocumentStatus.DONE, limit=10_000)
+            for doc in done_docs:
+                await chunk_repo.delete_by_document(doc.id)
+                await doc_repo.update_status(doc.id, DocumentStatus.QUEUED)
+
+        broker = app.state.broker = StatusBroker(settings.ingestion.broker_queue_size)
+        bm25 = app.state.bm25 = BM25Index()
+        queue = app.state.ingestion_queue = IngestionQueue(
+            PipelineDeps(
+                settings=settings,
+                doc_repo=doc_repo,
+                chunk_repo=chunk_repo,
+                event_repo=event_repo,
+                vector_store=vector_store,
+                bm25=bm25,
+                embedder=embedder,
+                broker=broker,
+            )
+        )
+
+        # Restart recovery (before the worker starts): any doc left non-terminal
+        # by a crash/shutdown gets its partial derived state wiped and is
+        # re-enqueued. Safe to re-run: ingestion reads only the stored file.
+        recovered: list[str] = []
+        for status in (
+            DocumentStatus.QUEUED,
+            DocumentStatus.PARSING,
+            DocumentStatus.CHUNKING,
+            DocumentStatus.EMBEDDING,
+            DocumentStatus.INDEXING,
+        ):
+            docs, _ = await doc_repo.list(status=status, limit=10_000)
+            for doc in sorted(docs, key=lambda d: d.created_at):  # oldest first
+                if status is not DocumentStatus.QUEUED:
+                    await vector_store.delete_by_document(doc.id)
+                    await chunk_repo.delete_by_document(doc.id)
+                    await doc_repo.update_status(doc.id, DocumentStatus.QUEUED)
+                    event = await event_repo.append(
+                        doc.id, "queued", detail={"reason": "restart_recovery"}
+                    )
+                    broker.publish(event)
+                recovered.append(doc.id)
+                await queue.enqueue(doc.id)
+        await vector_store.persist()
+
+        # BM25 rebuilds AFTER recovery so its corpus can't contain chunks the
+        # sweep just deleted; re-ingested docs are added back by the worker.
+        rows = await chunk_repo.list_non_duplicates()
+        await asyncio.to_thread(bm25.rebuild, [(c.id, c.text) for c in rows])
+
+        queue.start()
+        logger.info(
+            "startup_complete",
+            env=settings.env,
+            database_url=settings.database_url,
+            faiss_vectors=await vector_store.count(),
+            bm25_chunks=bm25.size(),
+            recovered_documents=len(recovered),
+        )
 
         yield
 
+        await queue.stop()
+        await vector_store.persist()
         await engine.dispose()
         logger.info("shutdown_complete")
 
@@ -137,6 +237,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
+    app.include_router(search.router, prefix="/api")
+    app.include_router(events.router, prefix="/api")
     return app
 
 

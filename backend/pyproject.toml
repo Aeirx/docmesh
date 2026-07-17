@@ -25,6 +25,11 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.File"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "slow: loads real ML models (first run downloads ~220 MB to the HF cache); run with `pytest -m slow`",
+]
+# The slow tier is opt-in: default runs stay fast and offline.
+addopts = "-m 'not slow'"
 
 [tool.mypy]
 python_version = "3.11"

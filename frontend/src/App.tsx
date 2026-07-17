@@ -1,9 +1,10 @@
 import type { LucideIcon } from "lucide-react";
-import { MessageCircleQuestion, Search, Waypoints } from "lucide-react";
+import { MessageCircleQuestion, Waypoints } from "lucide-react";
 import { createBrowserRouter, Navigate } from "react-router";
 
 import { Shell } from "./components/layout/Shell";
 import { DocumentsPage } from "./features/documents/DocumentsPage";
+import { SearchPage } from "./features/search/SearchPage";
 
 /** Styled placeholder for routes whose features land in later phases. */
 function ComingSoon({
@@ -41,17 +42,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/documents" replace /> },
       { path: "documents", element: <DocumentsPage /> },
-      {
-        path: "search",
-        element: (
-          <ComingSoon
-            icon={Search}
-            title="Hybrid search"
-            phase={2}
-            blurb="Dense embeddings fused with BM25 via reciprocal rank fusion, then cross-encoder reranked — built from primitives, no frameworks."
-          />
-        ),
-      },
+      { path: "search", element: <SearchPage /> },
       {
         path: "graph",
         element: (

@@ -79,7 +79,7 @@ export function Sidebar() {
 
       <div className="border-t border-border px-6 py-4">
         <p className="text-xs font-medium text-muted">
-          v0.1.0 <span className="mx-1.5 text-border">·</span> Phase 1
+          v0.1.0 <span className="mx-1.5 text-border">·</span> Phase 2
         </p>
       </div>
     </aside>

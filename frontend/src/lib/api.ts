@@ -1,7 +1,14 @@
 /** Thin typed API client. No axios — fetch covers everything except upload progress,
  *  where XMLHttpRequest is used because fetch still has no upload progress events. */
 
-import type { Document, ErrorResponse, Page, UploadAccepted } from "../types/api";
+import type {
+  Document,
+  ErrorResponse,
+  Page,
+  SearchRequest,
+  SearchResponse,
+  UploadAccepted,
+} from "../types/api";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -52,6 +59,21 @@ export function getDocument(id: string): Promise<Document> {
 
 export function deleteDocument(id: string): Promise<void> {
   return apiFetch<void>(`/api/documents/${id}`, { method: "DELETE" });
+}
+
+export function search(request: SearchRequest): Promise<SearchResponse> {
+  return apiFetch<SearchResponse>("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** SSE endpoints (consumed with EventSource — see hooks/useSse.ts). */
+export const GLOBAL_EVENTS_URL = "/api/events";
+
+export function documentEventsUrl(id: string): string {
+  return `/api/documents/${id}/events`;
 }
 
 export function uploadDocument(

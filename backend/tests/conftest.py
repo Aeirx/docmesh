@@ -15,6 +15,22 @@ from app.core.config import Settings, get_settings
 from app.storage.database import create_db_engine
 
 
+@pytest.fixture(autouse=True)
+def _fake_ml_models(request, monkeypatch):
+    """Fast tier: substitute the fake embedder/reranker for the real ones BEFORE
+    any app is built. Works because app.main imports the class NAMES (and the
+    real classes lazy-import torch), so patching the names is all it takes.
+    Tests marked ``slow`` opt out and load the real models."""
+    if request.node.get_closest_marker("slow"):
+        yield
+        return
+    from tests.fixtures.fakes import FakeEmbedder, FakeReranker
+
+    monkeypatch.setattr("app.main.DenseEmbedder", FakeEmbedder)
+    monkeypatch.setattr("app.main.Reranker", FakeReranker)
+    yield
+
+
 @pytest.fixture
 def settings(tmp_path, monkeypatch) -> Settings:
     data_dir = tmp_path / "data"

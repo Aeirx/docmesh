@@ -69,6 +69,27 @@ class SqlChunkRepository(ChunkRepository):
         async with self._engine.begin() as conn:
             await conn.execute(stmt, params)
 
+    async def existing_content_hashes(self, hashes: Sequence[str]) -> set[str]:
+        if not hashes:
+            return set()
+        async with self._engine.connect() as conn:
+            result = await conn.execute(
+                select(chunks.c.content_hash).where(
+                    chunks.c.content_hash.in_(list(set(hashes))),
+                    chunks.c.is_duplicate.is_(False),
+                )
+            )
+            return {row.content_hash for row in result}
+
+    async def list_non_duplicates(self) -> list[Chunk]:
+        async with self._engine.connect() as conn:
+            result = await conn.execute(
+                select(chunks)
+                .where(chunks.c.is_duplicate.is_(False))
+                .order_by(chunks.c.document_id, chunks.c.chunk_index)
+            )
+            return [_to_chunk(row) for row in result]
+
     async def vector_ids_for_document(self, doc_id: str) -> list[int]:
         async with self._engine.connect() as conn:
             result = await conn.execute(

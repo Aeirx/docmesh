@@ -81,6 +81,21 @@ class ChunkRepository(ABC):
     async def vector_ids_for_document(self, doc_id: str) -> list[int]: ...
 
     @abstractmethod
+    async def existing_content_hashes(self, hashes: Sequence[str]) -> set[str]:
+        """Which of these content hashes already exist on non-duplicate chunks.
+
+        Only originals count: duplicates of duplicates must chain back to the one
+        canonical chunk, never to another duplicate.
+        """
+        ...
+
+    @abstractmethod
+    async def list_non_duplicates(self) -> list[Chunk]:
+        """Every chunk with is_duplicate=False — the rebuild source for FAISS
+        id-mappings and the BM25 corpus at startup."""
+        ...
+
+    @abstractmethod
     async def delete_by_document(self, doc_id: str) -> int:
         """Delete a document's chunks, returning how many were removed."""
         ...
@@ -111,6 +126,9 @@ class IngestionEventRepository(ABC):
 class VectorRecord:
     chunk_id: str
     doc_id: str
+    # Allocated by the pipeline (max_vector_id()+1..), not by the store: passing it
+    # explicitly keeps SQL and FAISS agreeing on ids without either re-deriving them.
+    vector_id: int
     vector: list[float]
 
 

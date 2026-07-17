@@ -1,10 +1,20 @@
 import clsx from "clsx";
 import { ArrowUpToLine, FileStack, RefreshCw, Trash2 } from "lucide-react";
 
+import { useIngestionEvents } from "../../hooks/useSse";
 import { formatBytes, formatRelativeTime } from "../../lib/format";
-import type { Document, FileType } from "../../types/api";
+import type { Document, FileType, IngestionEvent } from "../../types/api";
 import { StatusBadge } from "./StatusBadge";
 import { useDeleteDocument, useDocuments } from "./useDocuments";
+
+/** One-line live context from the latest SSE event's detail payload. */
+function liveDetail(event: IngestionEvent): string | null {
+  const detail = event.detail ?? {};
+  if (typeof detail.chunks === "number") return `${detail.chunks} chunks`;
+  if (typeof detail.indexed === "number") return `${detail.indexed} indexed`;
+  if (typeof detail.chars === "number") return `${detail.chars.toLocaleString()} chars`;
+  return null;
+}
 
 const TYPE_STYLES: Record<FileType, string> = {
   pdf: "text-red-300/90 bg-red-400/10",
@@ -58,7 +68,7 @@ function SkeletonRows() {
   );
 }
 
-function Row({ doc }: { doc: Document }) {
+function Row({ doc, liveEvent }: { doc: Document; liveEvent?: IngestionEvent }) {
   const deleteDoc = useDeleteDocument();
   const isDeleting = deleteDoc.isPending;
 
@@ -87,6 +97,9 @@ function Row({ doc }: { doc: Document }) {
       </td>
       <td className="whitespace-nowrap py-3 pr-3">
         <StatusBadge status={doc.status} />
+        {liveEvent && liveDetail(liveEvent) && (
+          <p className="mt-1 pl-1 font-mono text-[11px] text-muted">{liveDetail(liveEvent)}</p>
+        )}
       </td>
       <td className="whitespace-nowrap py-3 pr-3 text-xs text-muted">
         {formatRelativeTime(doc.created_at)}
@@ -111,6 +124,9 @@ function Row({ doc }: { doc: Document }) {
 
 export function DocumentList() {
   const { data, isPending, isError, refetch } = useDocuments();
+  // Live pipeline status via SSE — also invalidates the query on every event,
+  // so rows advance without polling.
+  const liveEvents = useIngestionEvents();
 
   if (isPending) return <SkeletonRows />;
 
@@ -153,7 +169,7 @@ export function DocumentList() {
         </thead>
         <tbody>
           {data.items.map((doc) => (
-            <Row key={doc.id} doc={doc} />
+            <Row key={doc.id} doc={doc} liveEvent={liveEvents[doc.id]} />
           ))}
         </tbody>
       </table>

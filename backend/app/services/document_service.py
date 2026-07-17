@@ -12,8 +12,10 @@ filesystem, and os.replace is atomic on NTFS/POSIX so a crash never leaves a
 half-promoted file under a real document name.
 """
 
+import asyncio
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -27,7 +29,16 @@ from app.ingestion.validators import (
     stream_to_disk_capped,
 )
 from app.schemas.documents import Document, DocumentCreate
-from app.storage.interfaces import DocumentRepository, IngestionEventRepository
+from app.storage.interfaces import (
+    ChunkRepository,
+    DocumentRepository,
+    IngestionEventRepository,
+    VectorStore,
+)
+
+if TYPE_CHECKING:
+    from app.ingestion.queue import IngestionQueue
+    from app.search.bm25 import BM25Index
 
 logger = get_logger(__name__)
 
@@ -41,15 +52,26 @@ class DuplicateDocumentError(Exception):
 
 
 class DocumentService:
+    """Phase 2 collaborators default to None so repo-level tests (and any caller
+    that only needs upload validation) stay queue/index-free."""
+
     def __init__(
         self,
         doc_repo: DocumentRepository,
         event_repo: IngestionEventRepository,
         settings: Settings,
+        queue: "IngestionQueue | None" = None,
+        chunk_repo: ChunkRepository | None = None,
+        vector_store: VectorStore | None = None,
+        bm25: "BM25Index | None" = None,
     ) -> None:
         self._docs = doc_repo
         self._events = event_repo
         self._settings = settings
+        self._queue = queue
+        self._chunks = chunk_repo
+        self._vectors = vector_store
+        self._bm25 = bm25
 
     async def upload(self, upload: UploadFile) -> Document:
         display_name = sanitize_filename(upload.filename or "")
@@ -95,6 +117,10 @@ class DocumentService:
             await self._events.append(
                 doc_id, "queued", detail={"filename": display_name, "size_bytes": size_bytes}
             )
+            # Enqueue AFTER the queued event: the service owns pipeline ordering,
+            # and the worker's first event must never precede 'queued' in the log.
+            if self._queue is not None:
+                await self._queue.enqueue(doc_id)
         except Exception:
             # Never leave orphans: the .tmp on early failures, the promoted file if
             # the DB insert failed after os.replace.
@@ -119,10 +145,24 @@ class DocumentService:
         document = await self._docs.get(doc_id)
         if document is None:
             return False
+        # Collect chunk ids BEFORE the row delete (chunks cascade with it) so BM25
+        # can be told exactly what to forget.
+        chunk_ids: list[str] = []
+        if self._chunks is not None:
+            chunk_ids = [c.id for c in await self._chunks.list_by_document(doc_id)]
         # File first, then row: a row without a file is harmless; an orphaned file
         # without a row would never be cleaned up.
         (self._settings.uploads_dir / document.stored_filename).unlink(missing_ok=True)
         deleted = await self._docs.delete(doc_id)  # chunks/events go via ON DELETE CASCADE
         if deleted:
+            # Purge derived indexes so search can never return hits pointing at a
+            # deleted document. Deleting a doc that is mid-ingestion is a known
+            # benign race: the worker's failure handler finds the rows missing and
+            # fails-and-cleans — not worth cross-task locking.
+            if self._vectors is not None:
+                await self._vectors.delete_by_document(doc_id)
+                await self._vectors.persist()
+            if self._bm25 is not None and chunk_ids:
+                await asyncio.to_thread(self._bm25.remove, chunk_ids)
             logger.info("document_deleted", document_id=doc_id)
         return deleted

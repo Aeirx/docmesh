@@ -33,6 +33,18 @@ class SearchSettings(BaseModel):
     dense_weight: float = Field(0.5, ge=0, le=1)
     retrieve_n: int = 30
     return_n: int = 10
+    embed_batch_size: int = 32  # CPU sweet spot for bge-small (384-dim, 512 ctx)
+    rerank_batch_size: int = 16  # cross-encoder pairs are ~2x the tokens of a passage
+    faiss_overfetch: int = 4  # when doc_ids filter is set, fetch top_k * this, post-filter
+    semantic_highlights: bool = True  # one extra small embed batch over returned hits only
+    max_query_chars: int = 1000
+
+
+class IngestionSettings(BaseModel):
+    """Phase 2 ingestion runner knobs."""
+
+    broker_queue_size: int = 100  # per-subscriber SSE buffer; overflow drops oldest
+    warm_models: bool = False  # if True, load embedder+reranker at startup (dev nicety)
 
 
 class GraphSettings(BaseModel):
@@ -73,12 +85,17 @@ class Settings(BaseSettings):
 
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
+    ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
     claude: ClaudeSettings = Field(default_factory=ClaudeSettings)
 
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
+
+    @property
+    def faiss_index_path(self) -> Path:
+        return self.data_dir / "index" / "faiss.index"
 
     @property
     def max_upload_bytes(self) -> int:
@@ -89,6 +106,7 @@ class Settings(BaseSettings):
         # Creating the dirs at settings-construction time means every entry point
         # (app, alembic, tests) gets a usable data dir without repeating mkdir logic.
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.faiss_index_path.parent.mkdir(parents=True, exist_ok=True)
         return self
 
 

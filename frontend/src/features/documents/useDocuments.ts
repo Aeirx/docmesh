@@ -1,9 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { deleteDocument, listDocuments, uploadDocument } from "../../lib/api";
-import type { DocumentStatus } from "../../types/api";
-
-const TERMINAL_STATUSES: ReadonlySet<DocumentStatus> = new Set(["done", "failed"]);
 
 export const DOCUMENTS_QUERY_KEY = ["documents"] as const;
 
@@ -11,12 +8,8 @@ export function useDocuments() {
   return useQuery({
     queryKey: DOCUMENTS_QUERY_KEY,
     queryFn: () => listDocuments(),
-    // Phase 1 liveness: poll every 3s while any document is mid-pipeline so status
-    // badges advance without a refresh. Phase 2 replaces this with SSE.
-    refetchInterval: (query) => {
-      const docs = query.state.data?.items ?? [];
-      return docs.some((d) => !TERMINAL_STATUSES.has(d.status)) ? 3000 : false;
-    },
+    // No polling: liveness comes from SSE (hooks/useSse.ts invalidates this
+    // query on every ingestion event).
   });
 }
 

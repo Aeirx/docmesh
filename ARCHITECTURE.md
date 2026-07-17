@@ -101,7 +101,125 @@ In-process asyncio worker, not Celery/RQ:
   index; it is allocated by the repo (`max_vector_id() + 1` onward) rather than by FAISS,
   so the mapping survives index rebuilds.
 
-## 7. Decisions banked for later phases
+## 7. Chunking strategy (Phase 2)
+
+**Recursive semantic chunking: heading > paragraph > sentence > hard word cap, ~400
+tokens per chunk with 15% token-based overlap, counted in the embedding model's own
+tokenizer.**
+
+- Chunk size is a retrieval-precision vs context-completeness trade-off measured in
+  the *model's* tokens: bge-small has a 512-token window, so a 400 budget guarantees
+  no silent truncation at embed time while staying large enough that a chunk carries a
+  self-contained idea. Much smaller and embeddings become ambiguous fragments; much
+  larger and one vector averages several topics and matches none of them well.
+- Fixed character windows cut sentences and topics mid-thought — the severed halves
+  each embed to a point representing neither. Sentence alignment keeps every chunk a
+  set of complete propositions; heading boundaries are hard walls so one vector never
+  blends two sections' topics.
+- **Why token-based overlap**: the failure mode overlap insures against is an answer
+  straddling a chunk boundary. 15% of the *token budget* (not characters, not
+  sentences) bounds the cost precisely — the index grows by at most 15% — and the
+  config validator enforces < 50%, past which consecutive chunks are mostly the same
+  text and the window stops advancing usefully. Overlap carries the trailing
+  *sentences* of the previous chunk, so every chunk remains a contiguous slice of the
+  source (`text == full_text[char_start:char_end]` — exact provenance forever).
+- Token counting uses the real bge tokenizer **injected as a plain callable**: a
+  words×1.3 heuristic can drift 30%+ on technical text and silently blow the 512
+  limit, while injection keeps the chunker pure — zero ML imports, deterministic,
+  unit-testable with a whitespace counter. Loading the HF tokenizer is milliseconds
+  and pulls no model weights.
+
+## 8. Hybrid retrieval: RRF over score normalization (Phase 2)
+
+**`score(c) = w·1/(k + dense_rank) + (1−w)·1/(k + bm25_rank)`, k = 60.**
+
+- Raw cosine and BM25 scores are incommensurable: cosine lives in [−1, 1] with
+  query-dependent spread; BM25 is unbounded and corpus-statistics-dependent. Any
+  min–max or z-score normalization is per-query and distribution-sensitive — one
+  outlier rescales everything. RRF (Cormack et al., 2009) discards scores entirely
+  and fuses on *ranks*: scale-free, no tuning data, and empirically competitive with
+  trained fusion in the original paper.
+- **Why k = 60**: it is the paper's constant, and its role is to flatten the
+  reciprocal curve near the top. With k = 0, rank 1 contributes double rank 2 and one
+  ranker dominates; with k = 60, ranks 1 and 2 contribute 1/61 vs 1/62 — consensus
+  across rankers decides, not one ranker's #1.
+- `dense_weight` stays an explicit, per-request-overridable knob, and every raw
+  score/rank survives to the response — fusion just doesn't *depend* on them.
+
+## 9. Cross-encoder rerank: top-30 → top-10 (Phase 2)
+
+- The bi-encoder embeds query and passage *independently* — that independence is what
+  makes indexed search possible (passages embedded once at ingest; a query is one
+  forward pass plus a scan) but forces each text through a single 384-dim bottleneck
+  with no query–passage token interaction.
+- The cross-encoder (`ms-marco-MiniLM-L-6-v2`) attends jointly over the concatenated
+  pair, so every query token interacts with every passage token — substantially more
+  accurate, but one full forward pass *per pair*: scoring the corpus per query is
+  O(N) model inferences and unusable.
+- Retrieve-then-rerank is a compute-asymmetry funnel: cheap recall gets top-30
+  (`retrieve_n`), the expensive model spends its 30 forward passes only where they can
+  change the answer, and returns top-10 (`return_n`). Pool size is the knob: larger
+  raises the recall ceiling at linear rerank latency.
+
+## 10. FAISS IndexFlatIP, exact over approximate (Phase 2)
+
+- `IndexIDMap2(IndexFlatIP(384))` over L2-normalized vectors: inner product == exact
+  cosine, zero recall loss, zero training, and IDMap2 gives stable int64 ids plus
+  `remove_ids` for document deletion.
+- At this scale (tens of thousands of vectors, not millions) a brute-force scan is
+  sub-millisecond; IVF/HNSW would add recall risk and tuning knobs (nlist, nprobe, ef)
+  to solve a latency problem that does not exist. The `VectorStore` ABC is the swap
+  seam if the corpus ever outgrows flat.
+- Concurrency: one `asyncio.Lock` serializes every index touch, with the C++ calls in
+  `asyncio.to_thread` — the event loop never blocks and the (write-thread-unsafe)
+  index sees one caller at a time. Persistence is crash-safe: write to `.tmp`, then
+  atomic `os.replace` (NTFS and POSIX).
+- SQL is the source of truth for the id mapping; if the on-disk index disagrees with
+  SQL at startup, the index is cleared and every affected document is uniformly
+  re-queued for re-ingestion — vectors exist *only* in FAISS, so re-embedding is the
+  only honest recovery, and one uniform mechanism beats a partial-repair special case.
+
+## 11. Near-duplicate removal at cosine > 0.98 (Phase 2)
+
+- Exact duplicates are caught first by `content_hash` (sha256 over
+  whitespace/case-normalized text) — free, no model. Near-dups are a cosine threshold
+  on embeddings we computed anyway (see §7 note on MinHash).
+- 0.98 is deliberately conservative: at that similarity two chunks are reworded copies
+  (boilerplate headers, pasted paragraphs), not merely same-topic text (~0.8–0.9).
+  False-positive dedup silently loses content; false-negative costs one redundant
+  vector — so the threshold errs hard toward keeping.
+- Duplicates keep their rows (`is_duplicate=True`, provenance preserved) but never
+  reach FAISS or BM25 — search results stay diverse without losing the audit trail.
+  First occurrence wins: cross-document dups chain to the already-indexed original.
+
+## 12. BM25 rebuilt in memory, not persisted (Phase 2)
+
+- `rank_bm25`'s `BM25Okapi` precomputes corpus-global IDF at construction: it cannot
+  be incrementally updated (every add/remove shifts every IDF) or meaningfully
+  serialized apart from its corpus. So the index is rebuilt from SQLite — the durable
+  store — at startup and after every ingestion/deletion.
+- At ~50k chunks a rebuild is a few hundred ms of pure Python, well under a single
+  ingestion's embedding time, and runs off the event loop. A persisted BM25 artifact
+  would be a cache with invalidation bugs waiting to happen.
+- Readers never lock: searches read one attribute holding an immutable
+  `(bm25, ids)` snapshot (atomic under the GIL); writers rebuild off-line and swap.
+
+## 13. SSE: replay-then-live (Phase 2)
+
+- Per-document stream (`GET /api/documents/{id}/events`): **subscribe to the broker
+  first, replay persisted history second** — the subscriber queue buffers anything
+  published during replay, so no event can fall in the gap; an id watermark dedupes
+  the overlap. Event ids are the `ingestion_events` autoincrement ids, so the standard
+  `Last-Event-ID` header resumes with one indexed query. The stream closes itself on
+  `done`/`failed` — EventSource clients won't reconnect after a clean close.
+- Global stream (`GET /api/events`) is a live activity ticker with no replay: history
+  belongs to the per-document endpoint.
+- The broker never blocks ingestion: per-subscriber bounded queues drop the *oldest*
+  event on overflow — a slow SSE client loses history it can recover via replay; the
+  worker never stalls. Ordering rule: events are persisted to SQLite first, published
+  second — the broker is a best-effort mirror of the database, never the reverse.
+
+## 14. Decisions banked for later phases
 
 - **NMF over BERTopic for topic edges (Phase 3).** BERTopic drags in UMAP + HDBSCAN
   (heavy, stochastic, version-sensitive) for corpora of tens-to-hundreds of documents.
