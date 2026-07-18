@@ -39,6 +39,7 @@ from app.storage.interfaces import (
 if TYPE_CHECKING:
     from app.ingestion.queue import IngestionQueue
     from app.search.bm25 import BM25Index
+    from app.services.graph_service import GraphService
 
 logger = get_logger(__name__)
 
@@ -64,6 +65,7 @@ class DocumentService:
         chunk_repo: ChunkRepository | None = None,
         vector_store: VectorStore | None = None,
         bm25: "BM25Index | None" = None,
+        graph_service: "GraphService | None" = None,
     ) -> None:
         self._docs = doc_repo
         self._events = event_repo
@@ -72,6 +74,7 @@ class DocumentService:
         self._chunks = chunk_repo
         self._vectors = vector_store
         self._bm25 = bm25
+        self._graph = graph_service
 
     async def upload(self, upload: UploadFile) -> Document:
         display_name = sanitize_filename(upload.filename or "")
@@ -164,5 +167,12 @@ class DocumentService:
                 await self._vectors.persist()
             if self._bm25 is not None and chunk_ids:
                 await asyncio.to_thread(self._bm25.remove, chunk_ids)
+            # Graph refresh in the background — DELETE must return promptly, and
+            # correctness doesn't depend on it: the deleted doc's edges/analysis
+            # rows are already gone via FK CASCADE; the recompute merely
+            # refreshes the SCORES of surviving edges against the shrunken
+            # corpus (IDF and the topic space changed with it).
+            if self._graph is not None:
+                self._graph.recompute_soon(reason="delete")
             logger.info("document_deleted", document_id=doc_id)
         return deleted

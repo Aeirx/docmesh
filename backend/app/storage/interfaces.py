@@ -18,6 +18,7 @@ from app.schemas.documents import (
     DocumentStatus,
     IngestionEvent,
 )
+from app.schemas.graph import DocumentAnalysis, DocumentAnalysisCreate, Edge, EdgeCreate
 
 
 class DocumentRepository(ABC):
@@ -119,6 +120,48 @@ class IngestionEventRepository(ABC):
         ...
 
 
+class EdgeRepository(ABC):
+    @abstractmethod
+    async def upsert_many(self, edges: list[EdgeCreate]) -> None:
+        """Insert or replace by (source, target): existing rows for the same pair
+        are deleted then inserted in ONE transaction, preserving nothing —
+        recompute regenerates everything, and created_at continuity is not worth
+        dialect-specific ON CONFLICT."""
+        ...
+
+    @abstractmethod
+    async def list_all(self) -> list[Edge]: ...
+
+    @abstractmethod
+    async def get(self, source_doc_id: str, target_doc_id: str) -> Edge | None:
+        """Order-insensitive: sorts the ids internally. The source<target
+        canonical form is a storage concern; callers shouldn't have to know it."""
+        ...
+
+    @abstractmethod
+    async def delete_all(self) -> int: ...
+
+    @abstractmethod
+    async def delete_for_document(self, doc_id: str) -> int:
+        """WHERE source=:id OR target=:id. The FK CASCADE already covers document
+        deletion; this exists for tests and manual surgery."""
+        ...
+
+
+class DocumentAnalysisRepository(ABC):
+    @abstractmethod
+    async def replace_all(self, items: list[DocumentAnalysisCreate]) -> None:
+        """Delete-all + insert-all in one transaction — analysis is corpus-derived
+        (IDF, topic space), so partially-updated rows are meaningless."""
+        ...
+
+    @abstractmethod
+    async def list_all(self) -> list[DocumentAnalysis]: ...
+
+    @abstractmethod
+    async def get(self, doc_id: str) -> DocumentAnalysis | None: ...
+
+
 # --- Vector store seam (implemented in Phase 2 with FAISS; swappable to Pinecone) ---
 
 
@@ -149,6 +192,13 @@ class VectorStore(ABC):
         top_k: int,
         doc_ids: Sequence[str] | None = None,
     ) -> list[VectorHit]: ...
+
+    @abstractmethod
+    async def reconstruct(self, vector_ids: Sequence[int]) -> list[list[float] | None]:
+        """Stored vectors by external id, None where an id is not in the index.
+        Exists because Phase 3 scores documents pairwise from their chunk vectors;
+        IndexIDMap2 retains id->vector exactly so this is cheap (no re-embedding)."""
+        ...
 
     @abstractmethod
     async def delete_by_document(self, doc_id: str) -> int: ...

@@ -48,13 +48,41 @@ class IngestionSettings(BaseModel):
 
 
 class GraphSettings(BaseModel):
-    """Phase 3 document-graph edge scoring knobs."""
+    """Phase 3 document-graph edge scoring knobs. Every field named in
+    combiner.SCORING_FIELDS participates in params_hash: change one and the
+    stored graph is stale, recomputed on the next trigger (or at startup)."""
 
     semantic_weight: float = 0.5
     entity_weight: float = 0.3
     topic_weight: float = 0.2
     edge_threshold: float = 0.35
     top_k_pairs: int = 10
+
+    n_topics: int = 8  # NMF components ceiling; clamped to corpus size at fit time
+    spacy_model: str = "en_core_web_sm"
+    # Labels that name THINGS two documents can genuinely share. Numeric/temporal
+    # labels (DATE, CARDINAL, PERCENT, MONEY, ...) are excluded: "2024" shared by
+    # every paper is a meaningless match.
+    entity_labels: list[str] = [
+        "ORG", "PERSON", "PRODUCT", "GPE", "LOC", "NORP", "FAC",
+        "EVENT", "WORK_OF_ART", "LAW", "LANGUAGE",
+    ]
+    min_entity_len: int = 3
+    # bge cosine calibration: unrelated-passage cosines bottom out near 0.5 for
+    # this model family (anisotropic space), so raw cosine has no true zero.
+    # These knobs affinely rescale it to [0, 1]; measured values, not constants.
+    semantic_floor: float = Field(0.5, ge=-1, lt=1)
+    semantic_ceil: float = Field(0.95, gt=0, le=1)
+    random_state: int = 42  # NMF determinism — same corpus, same topics
+    # Display cap for node entity chips. NOT in SCORING_FIELDS: changing what the
+    # API shows must not invalidate the stored graph.
+    top_entities_per_node: int = 10
+
+    @model_validator(mode="after")
+    def _calibration_range(self) -> "GraphSettings":
+        if self.semantic_ceil <= self.semantic_floor:
+            raise ValueError("semantic_ceil must be greater than semantic_floor")
+        return self
 
 
 class ClaudeSettings(BaseModel):

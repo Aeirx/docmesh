@@ -225,7 +225,7 @@ tokenizer.**
   (heavy, stochastic, version-sensitive) for corpora of tens-to-hundreds of documents.
   NMF over TF-IDF is deterministic, fast, dependency-light (scikit-learn only), and its
   topic loadings are directly explainable — which matters because graph edges must be
-  *justified* in the UI, not just drawn.
+  *justified* in the UI, not just drawn. *(Landed in Phase 3 — see §17.)*
 - **Cosine ≥ 0.98 over MinHash for near-duplicate chunks (Phase 2).** We already have
   dense embeddings for every chunk, so near-dup detection is a threshold on vectors we
   computed anyway. MinHash shines at web scale on shingled text; here it would be a
@@ -233,3 +233,135 @@ tokenizer.**
 - **numpy pinned < 2** once ML deps land: faiss-cpu 1.10 wheels and parts of the
   spacy/thinc stack are still built against the numpy 1.x ABI; mixing ABIs is a
   runtime crash, not an install error, so the pin is explicit and commented.
+
+## 15. Semantic edges: top-k chunk pairs, not document-embedding cosine (Phase 3)
+
+**`semantic(A,B)` = mean of the top-k cosines in the cross-document chunk similarity
+matrix, with the winning pairs stored as evidence.**
+
+- Averaging a document's chunk embeddings into one centroid is a **low-pass filter**:
+  it preserves the dominant theme and destroys localized overlap. Two documents can be
+  strongly connected through one shared section — a security survey and a vision paper
+  both covering model-extraction attacks — while their centroids sit far apart. The
+  full cross-chunk matrix finds exactly the overlapping passages.
+- **Mean over k, not the single max**: one freak chunk pair (a shared boilerplate
+  sentence that slipped past dedup) must not manufacture an edge; averaging the k
+  best pairs demands sustained overlap.
+- The winning pairs *are* the evidence: stored verbatim in `edges.top_pairs`
+  (chunk ids + raw cosine), hydrated by the edge-detail API, shown in the UI, and fed
+  to the Phase 4 LLM explainer. A centroid cosine is a number with no exhibits.
+- Vectors come from **FAISS `reconstruct`** (the reason Phase 2 chose `IndexIDMap2`,
+  which retains the id→vector mapping exactly) — never from re-embedding, which would
+  cost a full model pass over the corpus per recompute. The one asymmetry this
+  creates: a document whose every chunk was deduplicated away has no vectors, so its
+  semantic score is 0 while entity/topic still fire on its own text.
+
+## 16. Entity edges: IDF-weighted Jaccard with smoothed IDF (Phase 3)
+
+**`entity(A,B) = Σ_{e∈A∩B} idf(e) / Σ_{e∈A∪B} idf(e)`, idf(e) = ln(1 + N/df(e)).**
+
+- **Unweighted overlap measures genre, not connection**: every tech document shares
+  "Google" and "USA". Weighting by corpus rarity makes a shared "DINOv3" (df=1 of 20,
+  idf ≈ 3.0) worth ~4.4× a shared "Microsoft" (df=20, idf ≈ 0.69).
+- **The `1 +` smoothing is load-bearing.** Plain `log(N/df)` zeroes out any entity
+  present in *every* document — which, in a 2-document corpus, is exactly the shared
+  entity you care about. Smoothed IDF keeps df=N above zero (ln 2) while rarity still
+  dominates, so the signal works from n=2 upward.
+- **Weighted Jaccard over cosine of entity vectors** because it (a) has a true zero —
+  no shared entities is exactly 0.0, which the combiner and threshold rely on — and
+  (b) decomposes term-by-term: each shared entity's numerator contribution IS its
+  evidence weight, mapping 1:1 onto the UI chips and the LLM prompt. Cosine mixes
+  counts and norms and cannot be explained entity-by-entity.
+- **Presence, not counts**, in the score: within-document frequency is length-biased
+  and inflated by chunk overlap; mention counts are retained for display only.
+  Numeric/temporal NER labels (DATE, CARDINAL, PERCENT…) are excluded — "2024" shared
+  by every paper is noise. Exact match on normalized text only; alias merging
+  ("Anthropic" vs "Anthropic PBC") is a research problem, accepted as a limitation.
+
+## 17. Topic edges: NMF + Jensen-Shannon; making three signals comparable (Phase 3)
+
+- **NMF over BERTopic** (banked in §14, now landed): BERTopic = embeddings + UMAP +
+  HDBSCAN + c-TF-IDF — heavy, nondeterministic, fragile on CPU-only Windows, and
+  HDBSCAN labels most of a 20-document corpus as outliers. NMF over TF-IDF with
+  `init="nndsvda"` is *deterministic*: same corpus + seed → same topics, demoable and
+  testable. Its non-negative components read directly as term-weighted topics.
+- **Fit on chunks, not documents**: 10–20 documents give the factorization 10–20 rows
+  (hopeless); hundreds of chunks give it a real matrix — and chunk-level topics catch
+  sub-document themes, the same thesis as §15. A document's distribution is the
+  L1-normalized mean of its chunks' loadings.
+- **Jensen-Shannon (base 2) similarity** `1 − JS(p,q)`: symmetric, finite on disjoint
+  supports (unlike KL), bounded [0, 1] in base 2, so identical → 1 and disjoint → 0.
+  Zero/None distributions guard to 0.0 — "no evidence" must never read as "similar",
+  and scipy's nan must never reach a stored score.
+- **Comparability across the three signals — fixed calibration, NOT per-batch
+  min-max.** Each signal maps to [0, 1] with a true "unrelated = 0": entity and topic
+  natively; dense cosine — whose empirical floor for bge-family models is ~0.5
+  (anisotropic space) — via a fixed affine rescale (`semantic_floor=0.5`,
+  `semantic_ceil=0.95`, measured knobs in the params hash). Per-batch min-max was
+  rejected because (1) one new upload rescales *every* edge and edges flip across the
+  threshold nondeterministically; (2) it degenerates at this scale — two docs is one
+  pair (0/0), three docs forces a 0 and a 1 per signal regardless of relatedness;
+  (3) calibrated-raw keeps stored scores reproducible:
+  `combined = 0.5·sem + 0.3·ent + 0.2·top` holds over the stored columns, checkable
+  by hand from a DB dump.
+
+## 18. `document_analysis` + `params_hash`: staleness as a completion marker (Phase 3)
+
+- Node-level derived attributes (topic distribution, full entity list) live in a
+  separate 1:1 `document_analysis` table (migration 0002), **not** JSON columns on
+  `documents`: analysis has a different owner (graph recompute vs ingestion worker), a
+  different write cadence (wholesale replacement), and its own `params_hash` — the
+  same derived/replaced/hashed pattern `edges` established. This amends 0001's "later
+  phases never touch migrations" plan; an honest design change beats contorting
+  derived data into the lifecycle table.
+- `params_hash` = sha256 of the sorted-key JSON of every scoring-relevant setting
+  (weights, threshold, calibration, NER labels, NMF seed…). Display-only knobs are
+  excluded — changing what the API shows must not invalidate the graph.
+- **Recompute write order is load-bearing**: `edges.delete_all → edges.upsert_many →
+  analysis.replace_all`. The analysis write is *last on purpose* — it is the
+  completion marker. One startup check ("done-doc count matches analysis rows AND all
+  hashes match the current config") therefore repairs three failure classes at once:
+  a config knob changed, a crash inside the two-transaction write window, and a first
+  boot over a pre-Phase-3 database. No atomic multi-table primitive needed.
+- The sklearn/spaCy artifacts (TF-IDF vocab, NMF components, IDF table) are refit
+  every recompute and **never pickled to disk** — same reasoning as the BM25 rebuild
+  (§12), plus a security one: persisted sklearn artifacts mean unpickling model state
+  at startup, added deserialization attack surface for zero gain at ~1 s of refit.
+
+## 19. Full recompute, never incremental (Phase 3)
+
+- For n ≤ 20 documents the entire pass is seconds of CPU (NER dominates). But
+  incremental would also be **incorrect**, not just premature: entity IDF and the NMF
+  topic space are corpus-level fits — one new document changes df counts and topic
+  components, which changes the scores of *existing* pairs. "Only score pairs
+  involving the new doc" silently serves edges scored against a dead model.
+- Full recompute is idempotent by construction: same corpus + same params_hash → same
+  edges (nndsvda-deterministic NMF included). Triggers: awaited after each ingestion
+  `done` (single-writer preserved — the next queued doc waits, correctly, since its
+  own recompute would supersede), background after delete (edges for the deleted doc
+  are already gone via FK CASCADE; the recompute only refreshes surviving scores),
+  background at startup when stale (§18), and `POST /api/graph/recompute` for config
+  changes. An `asyncio.Lock` serializes them all; latest-wins because each run reads
+  fresh state after acquiring the lock.
+- Future seam, deliberately not built: `document_analysis.entities` persists per-doc
+  entity maps, so NER — the only expensive step — could later be skipped for
+  unchanged documents.
+
+## 20. Graph recompute is a post-done side effect, outside the failure handler (Phase 3)
+
+- **The recompute hook in the ingestion worker sits outside the pipeline's
+  try/except, in its own catch-and-log guard.** The pipeline's failure handler purges
+  a document's chunks and vectors before marking it `failed` — correct for ingestion
+  errors, catastrophic if a graph bug could reach it: it would destroy the
+  freshly-indexed chunks of a document that is already legitimately `done`. A graph
+  failure logs `graph_recompute_failed` and emits a `graph_failed` event; the
+  document stays `done`, search keeps working, and the graph self-repairs on the next
+  trigger.
+- Graph progress is **not** a document status: `documents.status` has a CHECK
+  constraint enumerating the seven lifecycle states, recompute is corpus-level rather
+  than per-document, and the per-doc SSE stream correctly closes at the terminal
+  `done`. Instead, coarse `graph_start/graph_progress/graph_done/graph_failed` events
+  (≤ 5 rows per recompute) are appended to `ingestion_events` under the *triggering*
+  document and reach the UI via the global `/api/events` stream, which never closes.
+  Delete/startup/manual recomputes have no triggering document (`document_id` is NOT
+  NULL), so they log structurally instead.

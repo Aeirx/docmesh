@@ -58,8 +58,11 @@ async def _run_flow(app, client) -> None:
     doc_id = await _upload_and_wait(app, client)
 
     # --- pipeline audit trail --------------------------------------------------
+    # Phase 3 appends graph_* events to the triggering doc AFTER 'done' (the
+    # recompute may still be running here); the ingestion sequence itself is
+    # unchanged, so assert on the non-graph prefix.
     events = await app.state.event_repo.list_for_document(doc_id)
-    assert [e.status for e in events] == [
+    assert [e.status for e in events if not e.status.startswith("graph_")] == [
         "queued",
         "parsing",
         "chunking",
@@ -67,7 +70,7 @@ async def _run_flow(app, client) -> None:
         "indexing",
         "done",
     ]
-    done_detail = events[-1].detail or {}
+    done_detail = next(e.detail for e in events if e.status == "done") or {}
     assert done_detail["duplicate_count"] >= 1
     assert done_detail["indexed_count"] == done_detail["chunk_count"] - done_detail[
         "duplicate_count"

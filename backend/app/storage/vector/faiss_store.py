@@ -116,6 +116,24 @@ class FaissVectorStore(VectorStore):
         ]
         return hits[:top_k]
 
+    async def reconstruct(self, vector_ids: Sequence[int]) -> list[list[float] | None]:
+        # IDMap2 (not plain IDMap) retains the external-id -> vector mapping, which
+        # is exactly what makes this cheap — Phase 3's pairwise document scoring
+        # pulls every stored chunk vector here instead of re-embedding the corpus.
+        def _reconstruct_all(index: Any) -> list[list[float] | None]:
+            out: list[list[float] | None] = []
+            for vid in vector_ids:
+                try:
+                    out.append(index.reconstruct(vid).tolist())
+                except RuntimeError:  # faiss raises RuntimeError for unknown ids
+                    out.append(None)
+            return out
+
+        async with self._lock:
+            if self._index is None:
+                return [None] * len(vector_ids)
+            return await asyncio.to_thread(_reconstruct_all, self._index)
+
     async def delete_by_document(self, doc_id: str) -> int:
         import numpy as np
 

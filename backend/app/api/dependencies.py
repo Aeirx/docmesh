@@ -13,10 +13,13 @@ from app.search.bm25 import BM25Index
 from app.search.embedder import DenseEmbedder
 from app.search.reranker import Reranker
 from app.services.document_service import DocumentService
+from app.services.graph_service import GraphService
 from app.services.search_service import SearchService
 from app.storage.interfaces import (
     ChunkRepository,
+    DocumentAnalysisRepository,
     DocumentRepository,
+    EdgeRepository,
     IngestionEventRepository,
     VectorStore,
 )
@@ -62,6 +65,18 @@ def get_ingestion_queue(request: Request) -> IngestionQueue:
     return request.app.state.ingestion_queue
 
 
+def get_edge_repo(request: Request) -> EdgeRepository:
+    return request.app.state.edge_repo
+
+
+def get_analysis_repo(request: Request) -> DocumentAnalysisRepository:
+    return request.app.state.analysis_repo
+
+
+def get_graph_service(request: Request) -> GraphService:
+    return request.app.state.graph_service
+
+
 def get_document_service(request: Request) -> DocumentService:
     return DocumentService(
         doc_repo=request.app.state.document_repo,
@@ -71,6 +86,7 @@ def get_document_service(request: Request) -> DocumentService:
         chunk_repo=request.app.state.chunk_repo,
         vector_store=request.app.state.vector_store,
         bm25=request.app.state.bm25,
+        graph_service=request.app.state.graph_service,
     )
 
 

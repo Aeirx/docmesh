@@ -117,3 +117,99 @@ export interface SearchResponse {
   timings: SearchTimings;
   debug?: SearchDebug;
 }
+
+/* --- Phase 3: connection graph (app/schemas/graph.py) ----------------------- */
+/* GET /api/graph serializes with exclude_none, so nullable fields may be absent. */
+
+export interface TopicWeight {
+  topic_id: number;
+  weight: number;
+  terms: string[];
+}
+
+export interface EntityWeight {
+  text: string;
+  label: string;
+  idf: number;
+  count: number;
+}
+
+export interface SharedEntity {
+  text: string;
+  label: string;
+  idf: number;
+  count_a: number;
+  count_b: number;
+}
+
+export interface GraphNode {
+  id: string;
+  filename: string;
+  file_type: FileType;
+  size_bytes: number;
+  chunk_count: number;
+  dominant_topic_id?: number | null;
+  top_topics: TopicWeight[];
+  top_entities: EntityWeight[];
+  /** Present only in query mode (max chunk cosine vs. the query; 0 = unhit). */
+  relevance?: number | null;
+}
+
+export type DominantSignal = "semantic" | "entity" | "topic";
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  semantic_score: number;
+  entity_score: number;
+  topic_score: number;
+  combined_score: number;
+  dominant_signal: DominantSignal;
+  /** Top 3 in the graph view; the full list arrives via EdgeDetail. */
+  shared_entities: SharedEntity[];
+  top_pair_count: number;
+}
+
+export interface GraphMeta {
+  document_count: number;
+  edge_count: number;
+  params_hash: string;
+  stale: boolean;
+  computed_at?: string | null;
+  threshold: number;
+  weights: Record<string, number>;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  meta: GraphMeta;
+}
+
+export interface ChunkRef {
+  chunk_id: string;
+  document_id: string;
+  text: string;
+  page_start: number | null;
+  page_end: number | null;
+  section: string | null;
+}
+
+export interface HydratedPair {
+  similarity: number;
+  a: ChunkRef;
+  b: ChunkRef;
+}
+
+export interface EdgeDetail {
+  edge: GraphEdge;
+  top_pairs: HydratedPair[];
+}
+
+export interface GraphRecomputeResult {
+  document_count: number;
+  edge_count: number;
+  duration_ms: number;
+  params_hash: string;
+}

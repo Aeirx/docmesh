@@ -1,18 +1,22 @@
 """Fake ML models for the fast test tier.
 
-Same interfaces as the real DenseEmbedder/Reranker, no torch, fully
-deterministic. FakeEmbedder produces hashed bag-of-words vectors: each token
-maps to a fixed random 384-dim vector (seeded from the token's md5), a text
-embeds to the L2-normalized sum. Texts sharing words get high cosine — so
+Same interfaces as the real DenseEmbedder/Reranker/EntityExtractor, no torch or
+spaCy, fully deterministic. FakeEmbedder produces hashed bag-of-words vectors:
+each token maps to a fixed random 384-dim vector (seeded from the token's md5),
+a text embeds to the L2-normalized sum. Texts sharing words get high cosine — so
 lexical matches score high in the dense path too, making known-hit assertions
-robust. FakeReranker scores by distinct query-term overlap.
+robust. FakeReranker scores by distinct query-term overlap. FakeEntityExtractor
+treats capitalized tokens as ORG entities, normalized through the SAME rules as
+the real extractor, so entity-overlap assertions exercise the real scorer.
 """
 
 import hashlib
+import re
 from collections.abc import Sequence
 
 import numpy as np
 
+from app.graph.entities import normalize_entity
 from app.search.bm25 import tokenize
 
 _token_vectors: dict[str, np.ndarray] = {}
@@ -53,6 +57,36 @@ class FakeEmbedder:
         # No instruction prefix: the fake is bag-of-words, a prefix would only
         # blur the lexical signal the fast tier relies on.
         return self.embed_passages([text])[0]
+
+
+_CAPITALIZED = re.compile(r"\b[A-Z][A-Za-z0-9-]{2,}\b")
+
+
+class FakeEntityExtractor:
+    """Deterministic stand-in for the spaCy extractor: every capitalized token of
+    3+ chars is an "ORG" mention. Runs the real normalization so scorer-level
+    behavior (casefold matching, min-length filtering) is exercised for real."""
+
+    def __init__(
+        self,
+        model_name: str = "fake",
+        keep_labels: frozenset[str] = frozenset({"ORG"}),
+        min_len: int = 3,
+    ) -> None:
+        self._model_name = model_name
+        self._keep_labels = keep_labels
+        self._min_len = min_len
+
+    def extract(self, texts: list[str]) -> dict[tuple[str, str], int]:
+        counts: dict[tuple[str, str], int] = {}
+        for text in texts:
+            for match in _CAPITALIZED.finditer(text):
+                norm = normalize_entity(match.group(0))
+                if len(norm) < self._min_len:
+                    continue
+                key = (norm, "ORG")
+                counts[key] = counts.get(key, 0) + 1
+        return counts
 
 
 class FakeReranker:

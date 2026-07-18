@@ -2,12 +2,13 @@
 
 One MetaData, portable types only (String/Text/Integer/Float/Boolean/JSON/
 DateTime(timezone=True), stored UTC), so the identical definitions run on SQLite today
-and Postgres tomorrow. The edges/edge_explanations tables are created now even though
-Phase 3 fills them: shipping the complete schema in migration 0001 means later phases
-never touch migrations.
+and Postgres tomorrow. The edges/edge_explanations tables were created in migration
+0001 even though Phase 3 fills them; the "later phases never touch migrations" plan
+held until Phase 3's design added per-document analysis rows (document_analysis,
+migration 0002) — an honest design change, not a schema oversight.
 
-Keep this file in lockstep with alembic/versions/0001_initial_schema.py — it is the
-target_metadata Alembic diffs against.
+Keep this file in lockstep with alembic/versions/ — it is the target_metadata Alembic
+diffs against.
 """
 
 from sqlalchemy import (
@@ -146,6 +147,31 @@ edges = Table(
     Index("ix_edges_source_doc_id", "source_doc_id"),
     Index("ix_edges_target_doc_id", "target_doc_id"),
     Index("ix_edges_combined_score", "combined_score"),
+)
+
+# Per-document derived graph attributes (Phase 3, migration 0002). Deliberately NOT
+# JSON columns on `documents`: analysis has a different owner (graph recompute, not
+# the ingestion worker), a different write cadence (wholesale replacement every
+# recompute), and its own params_hash — the same derived/replaced/hashed pattern
+# `edges` established. Crucially, a missing or hash-stale row here is the signal
+# that a recompute never completed (it is written LAST), which is what the startup
+# staleness check keys on.
+document_analysis = Table(
+    "document_analysis",
+    metadata,
+    Column(
+        "document_id",
+        String(32),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("dominant_topic_id", Integer, nullable=True),
+    Column("top_topics", JSON, nullable=True),  # [{topic_id, weight, terms}]
+    # FULL idf-sorted entity list [{text, label, idf, count}] — the API truncates
+    # for node display; Phase 4's LLM prompt wants complete evidence.
+    Column("entities", JSON, nullable=True),
+    Column("params_hash", String(64), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 edge_explanations = Table(

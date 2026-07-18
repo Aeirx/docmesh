@@ -24,10 +24,11 @@ def _fake_ml_models(request, monkeypatch):
     if request.node.get_closest_marker("slow"):
         yield
         return
-    from tests.fixtures.fakes import FakeEmbedder, FakeReranker
+    from tests.fixtures.fakes import FakeEmbedder, FakeEntityExtractor, FakeReranker
 
     monkeypatch.setattr("app.main.DenseEmbedder", FakeEmbedder)
     monkeypatch.setattr("app.main.Reranker", FakeReranker)
+    monkeypatch.setattr("app.main.EntityExtractor", FakeEntityExtractor)
     yield
 
 

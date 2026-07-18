@@ -11,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import documents, events, health, search
+from app.api.routes import documents, events, graph, health, search
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
+from app.graph.entities import EntityExtractor
 from app.ingestion.broker import StatusBroker
 from app.ingestion.queue import IngestionQueue, PipelineDeps
 from app.ingestion.validators import UploadValidationError
@@ -23,14 +24,18 @@ from app.schemas.documents import DocumentStatus
 from app.search.bm25 import BM25Index
 
 # Imported as names (not called) so the fast-tier tests can monkeypatch
-# app.main.DenseEmbedder / app.main.Reranker with fakes before the app builds.
-# Cheap imports: both classes lazy-load torch inside their loaders.
+# app.main.DenseEmbedder / app.main.Reranker / app.main.EntityExtractor with
+# fakes before the app builds. Cheap imports: all three classes lazy-load their
+# heavy dependency (torch / spaCy) inside their loaders.
 from app.search.embedder import DenseEmbedder
 from app.search.reranker import Reranker
 from app.services.document_service import DuplicateDocumentError
+from app.services.graph_service import GraphService
 from app.storage.database import create_db_engine
+from app.storage.sql.analysis_repo import SqlDocumentAnalysisRepository
 from app.storage.sql.chunk_repo import SqlChunkRepository
 from app.storage.sql.document_repo import SqlDocumentRepository
+from app.storage.sql.edge_repo import SqlEdgeRepository
 from app.storage.sql.event_repo import SqlIngestionEventRepository
 from app.storage.vector.faiss_store import FaissVectorStore
 
@@ -85,6 +90,8 @@ def create_app() -> FastAPI:
         doc_repo = app.state.document_repo = SqlDocumentRepository(engine)
         chunk_repo = app.state.chunk_repo = SqlChunkRepository(engine)
         event_repo = app.state.event_repo = SqlIngestionEventRepository(engine)
+        edge_repo = app.state.edge_repo = SqlEdgeRepository(engine)
+        analysis_repo = app.state.analysis_repo = SqlDocumentAnalysisRepository(engine)
 
         # Models: construction only — nothing loads until first use (lazy
         # singletons), so startup stays instant unless warm_models is set.
@@ -93,6 +100,11 @@ def create_app() -> FastAPI:
         )
         reranker = app.state.reranker = Reranker(
             settings.search.rerank_model, settings.search.rerank_batch_size
+        )
+        entity_extractor = app.state.entity_extractor = EntityExtractor(
+            settings.graph.spacy_model,
+            frozenset(settings.graph.entity_labels),
+            settings.graph.min_entity_len,
         )
         if settings.ingestion.warm_models:
             await asyncio.to_thread(embedder._get_model)
@@ -121,6 +133,18 @@ def create_app() -> FastAPI:
 
         broker = app.state.broker = StatusBroker(settings.ingestion.broker_queue_size)
         bm25 = app.state.bm25 = BM25Index()
+        graph_service = app.state.graph_service = GraphService(
+            settings=settings,
+            doc_repo=doc_repo,
+            chunk_repo=chunk_repo,
+            edge_repo=edge_repo,
+            analysis_repo=analysis_repo,
+            vector_store=vector_store,
+            event_repo=event_repo,
+            broker=broker,
+            entity_extractor=entity_extractor,
+            embedder=embedder,
+        )
         queue = app.state.ingestion_queue = IngestionQueue(
             PipelineDeps(
                 settings=settings,
@@ -131,6 +155,7 @@ def create_app() -> FastAPI:
                 bm25=bm25,
                 embedder=embedder,
                 broker=broker,
+                graph_service=graph_service,
             )
         )
 
@@ -164,6 +189,14 @@ def create_app() -> FastAPI:
         rows = await chunk_repo.list_non_duplicates()
         await asyncio.to_thread(bm25.rebuild, [(c.id, c.text) for c in rows])
 
+        # Graph staleness: edges live in the DB, so startup normally rebuilds
+        # nothing. One check covers three repairs — a scoring-config knob
+        # changed (params_hash mismatch), a crash inside the recompute write
+        # window (analysis rows are written last, so they're missing), and the
+        # first boot over a pre-Phase-3 database.
+        if await graph_service.is_stale():
+            graph_service.recompute_soon(reason="startup_stale")
+
         queue.start()
         logger.info(
             "startup_complete",
@@ -176,7 +209,10 @@ def create_app() -> FastAPI:
 
         yield
 
+        # queue first: the worker may be awaiting a recompute — cancelling the
+        # worker cancels that await — then the graph service's own bg tasks.
         await queue.stop()
+        await graph_service.aclose()
         await vector_store.persist()
         await engine.dispose()
         logger.info("shutdown_complete")
@@ -239,6 +275,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix="/api")
     app.include_router(search.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
+    app.include_router(graph.router, prefix="/api")
     return app
 
 

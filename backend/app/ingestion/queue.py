@@ -18,7 +18,7 @@ import asyncio
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -36,6 +36,9 @@ from app.storage.interfaces import (
     VectorStore,
 )
 
+if TYPE_CHECKING:
+    from app.services.graph_service import GraphService
+
 logger = get_logger(__name__)
 
 
@@ -51,6 +54,8 @@ class PipelineDeps:
     bm25: BM25Index
     embedder: DenseEmbedder
     broker: StatusBroker
+    # Optional so repo-level tests can build deps without the graph stack.
+    graph_service: "GraphService | None" = None
 
 
 class _Stopwatch:
@@ -164,7 +169,7 @@ async def _run_pipeline(doc_id: str, deps: PipelineDeps) -> None:
     if doc is None:
         return  # deleted while queued — not an error
     path = deps.settings.uploads_dir / doc.stored_filename
-    stage = DocumentStatus.QUEUED
+    stage: DocumentStatus = DocumentStatus.QUEUED
 
     async def enter_stage(
         status: DocumentStatus,
@@ -315,3 +320,16 @@ async def _run_pipeline(doc_id: str, deps: PipelineDeps) -> None:
             duration_ms=timer.lap(),
         )
         deps.broker.publish(event)
+
+    # ---- graph recompute (post-done side effect) -----------------------------
+    # DELIBERATELY outside the pipeline's try/except and wrapped in its own
+    # guard: the failure handler above purges chunks/vectors before marking a
+    # document 'failed' — a graph bug must NEVER trip it for a document that is
+    # already legitimately 'done'. Awaited (not fire-and-forget) so the single-
+    # writer property holds: the next queued document waits, which is correct
+    # because its own recompute would supersede this one anyway.
+    if stage is DocumentStatus.DONE and deps.graph_service is not None:
+        try:
+            await deps.graph_service.recompute(triggered_by_doc=doc_id, reason="ingestion")
+        except Exception:
+            logger.exception("graph_recompute_failed", document_id=doc_id)

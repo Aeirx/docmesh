@@ -3,7 +3,10 @@
 
 import type {
   Document,
+  EdgeDetail,
   ErrorResponse,
+  GraphRecomputeResult,
+  GraphResponse,
   Page,
   SearchRequest,
   SearchResponse,
@@ -67,6 +70,22 @@ export function search(request: SearchRequest): Promise<SearchResponse> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
+}
+
+/** Phase 3: connection graph. */
+
+export function getGraph(query?: string): Promise<GraphResponse> {
+  const params = query ? `?query=${encodeURIComponent(query)}` : "";
+  return apiFetch<GraphResponse>(`/api/graph${params}`);
+}
+
+/** Either id order is accepted — the backend canonicalizes. */
+export function getEdgeDetail(source: string, target: string): Promise<EdgeDetail> {
+  return apiFetch<EdgeDetail>(`/api/graph/edges/${source}/${target}`);
+}
+
+export function recomputeGraph(): Promise<GraphRecomputeResult> {
+  return apiFetch<GraphRecomputeResult>("/api/graph/recompute", { method: "POST" });
 }
 
 /** SSE endpoints (consumed with EventSource — see hooks/useSse.ts). */
