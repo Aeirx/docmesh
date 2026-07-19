@@ -536,3 +536,23 @@ explanation panel — lands with the frontend phase-4 task.)*
   construction). Never a 500. Token streaming is a future seam
   (`LLMClient.stream()` + SSE), deliberately not built: one bounded synchronous
   generation with an honest client loading state is simpler and sufficient.
+
+## 29. Deployment: two containers, CPU wheels, honest verification status (Phase 6)
+
+- **Two services, no orchestration** — the point of SQLite + FAISS + in-process
+  workers is that `docker compose up` needs nothing else: a python:3.11-slim
+  backend and an nginx-served static frontend (SPA fallback + same-origin /api
+  proxy mirroring the Vite dev proxy).
+- **CPU wheels are load-bearing on Linux**: plain `pip install torch` inside the
+  image would pull the CUDA build (~5 GB of NVIDIA wheels) for a CPU-only app,
+  so the Dockerfile adds the pytorch CPU extra index (the +cpu local version
+  outsorts the PyPI build). llama-cpp-python's CPU index ships manylinux wheels,
+  so no compiler enters the image either.
+- **Model caches persist in the volume**: `HF_HOME=/app/data/hf` puts the bge +
+  cross-encoder downloads next to the GGUF (already under data/models/), so
+  recreating the container never re-downloads a model.
+- **Verification honesty**: the compose setup is reviewed but was NOT
+  runtime-verified — the development machine has no Docker daemon. The native
+  quickstart is the verified path, and the README says so plainly. Claiming
+  otherwise would be exactly the kind of resume inflation this project exists
+  to avoid.
