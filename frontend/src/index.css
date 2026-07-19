@@ -12,6 +12,15 @@
   --color-text: #e6e8ee;
   --color-muted: #8b91a3;
 
+  /* Phase 4b (design/graph-visual-spec.md §1): derived neutrals + the 3 signal
+     hues. --color-sig-top amber doubles as the app's warning color (Stale). */
+  --color-sunken: #0c0e14;
+  --color-raised: #1c2030;
+  --color-border-strong: #323950;
+  --color-sig-sem: #a48fff;
+  --color-sig-ent: #3dc9de;
+  --color-sig-top: #e8a33d;
+
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
 
@@ -57,4 +66,372 @@ body {
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/* ============================================================
+   Phase 4b · Graph view — port of design/graph-mockup.html.
+   Structural layout lives in Tailwind classes; everything that
+   needs color-mix over a per-node --tc / per-edge --ec var, or a
+   keyframe, lives here so the treatments stay byte-faithful to
+   the designer spec.
+   ============================================================ */
+
+/* mono micro-label — the recurring signature detail */
+.klabel {
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* ---- canvas + react-flow chrome overrides ---- */
+.dm-canvas {
+  background: var(--color-bg);
+}
+.dm-canvas .react-flow {
+  background: transparent;
+}
+.dm-canvas::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 40% 40%, rgba(124, 92, 255, 0.06), transparent 50%),
+    radial-gradient(circle at 70% 60%, rgba(61, 201, 222, 0.04), transparent 40%);
+  animation: void-drift 24s ease-in-out infinite alternate;
+}
+.dm-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background: radial-gradient(140% 110% at 50% 50%, transparent 55%, rgba(8, 9, 13, 0.65) 100%);
+}
+@keyframes void-drift {
+  0% { transform: scale(1) translate(0, 0) rotate(0deg); }
+  100% { transform: scale(1.1) translate(-2%, 2%) rotate(3deg); }
+}
+
+.dm-canvas .react-flow__attribution {
+  display: none;
+}
+
+/* dot grid for non-react-flow surfaces (skeleton / empty states) */
+.dm-dotgrid {
+  background-image: radial-gradient(circle, #1e2331 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -4px -4px;
+}
+
+/* glass chrome recipe (metabar / legend / minimap / controls) */
+.dm-glass,
+.dm-canvas .react-flow__minimap,
+.dm-canvas .react-flow__controls {
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  backdrop-filter: blur(32px) saturate(120%);
+  -webkit-backdrop-filter: blur(32px) saturate(120%);
+  border: 1px solid var(--color-border);
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 20%, rgba(255, 255, 255, 0.15));
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.dm-canvas .react-flow__minimap {
+  padding: 7px;
+  border-radius: 12px;
+}
+.dm-canvas .react-flow__minimap-svg {
+  border-radius: 6px;
+  background: var(--color-sunken);
+}
+.dm-canvas .react-flow__controls {
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.dm-canvas .react-flow__controls-button {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 0;
+  color: var(--color-muted);
+  fill: currentColor;
+  transition:
+    background 160ms ease-out,
+    color 160ms ease-out;
+}
+.dm-canvas .react-flow__controls-button + .react-flow__controls-button {
+  border-top: 1px solid var(--color-border);
+}
+.dm-canvas .react-flow__controls-button:hover {
+  background: var(--color-raised);
+  color: var(--color-text);
+}
+.dm-canvas .react-flow__controls-button svg {
+  fill: currentColor;
+  max-width: 14px;
+  max-height: 14px;
+}
+/* minimap + controls slide left when a side panel opens (396px + 16px gap) */
+.dm-canvas .react-flow__panel.bottom.right {
+  transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dm-canvas.panel-open .react-flow__panel.bottom.right {
+  transform: translateX(-412px);
+}
+
+/* ---- DocNode ---- */
+.dm-node {
+  display: flex;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in oklab, var(--tc) 6%, var(--color-surface));
+  border: 1px solid color-mix(in oklab, var(--tc) 28%, var(--color-border));
+  border-radius: 10px;
+  cursor: grab;
+  user-select: none;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.08),
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    0 8px 16px rgba(0, 0, 0, 0.3);
+  transition:
+    transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 200ms ease-out,
+    background 200ms ease-out,
+    opacity 240ms ease-out;
+}
+.dm-node::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.15),
+    transparent
+  );
+  transform: skewX(-20deg);
+  transition: left 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+.dm-node:active {
+  cursor: grabbing;
+}
+.dm-node:hover,
+.dm-node.is-glow {
+  transform: translateY(-3px) scale(1.02);
+  background: color-mix(in oklab, var(--tc) 12%, var(--color-surface));
+  border-color: color-mix(in oklab, var(--tc) 60%, var(--color-border));
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.15),
+    0 0 0 3px color-mix(in oklab, var(--tc) 25%, transparent),
+    0 0 40px color-mix(in oklab, var(--tc) 45%, transparent),
+    0 12px 32px rgba(0, 0, 0, 0.6);
+}
+.dm-node:hover::after,
+.dm-node.is-glow::after {
+  left: 200%;
+}
+/* Phase-5 relevance seam: query-mode non-hits fade out */
+.dm-node.is-dim {
+  opacity: 0.15;
+}
+/* size tiers — node size encodes document size (designer spec §2) */
+.dm-node.s  { gap: 8px;  padding: 0 10px; --fs: 11px;   --icon: 22px; --meta: 8.5px; }
+.dm-node.m  { gap: 9px;  padding: 0 12px; --fs: 12px;   --icon: 26px; --meta: 9px; }
+.dm-node.l  { gap: 10px; padding: 0 13px; --fs: 12.5px; --icon: 30px; --meta: 9.5px; }
+.dm-node.xl { gap: 11px; padding: 0 15px; --fs: 13.5px; --icon: 34px; --meta: 10px; }
+
+.dm-node .n-icon {
+  flex: none;
+  width: var(--icon);
+  height: var(--icon);
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--tc) 13%, transparent);
+  color: var(--tc);
+}
+.dm-node .n-icon svg {
+  width: 72%;
+  height: 72%;
+  display: block;
+}
+.dm-node .n-name {
+  font-size: var(--fs);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.dm-node .n-meta {
+  font: 500 var(--meta) / 1 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.dm-node .n-badge {
+  flex: none;
+  font: 600 10px/1 var(--font-mono);
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--tc) 14%, transparent);
+  color: color-mix(in oklab, var(--tc) 78%, #fff);
+}
+.dm-node.s .n-badge {
+  font-size: 9px;
+  padding: 3px 6px;
+}
+/* invisible center handles — edges connect center-to-center */
+.dm-handle.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* ---- ConnectionEdge (3-layer treatment: glow / base / dash-flow) ---- */
+.dm-edge path {
+  fill: none;
+  stroke-linecap: round;
+}
+.dm-edge .e-hit {
+  stroke: transparent;
+  stroke-width: 18;
+  pointer-events: stroke;
+}
+.dm-edge .e-base {
+  stroke: var(--ec);
+  stroke-opacity: 0.5;
+  pointer-events: none;
+  transition: stroke-opacity 160ms ease-out;
+}
+.dm-edge .e-glow {
+  stroke: var(--ec);
+  stroke-opacity: 0;
+  stroke-width: 12;
+  pointer-events: none;
+  transition: stroke-opacity 200ms ease-out;
+}
+.dm-edge .e-flow {
+  stroke: var(--ec-bright);
+  stroke-width: 2.5;
+  stroke-opacity: 0;
+  stroke-dasharray: 24 16;
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px var(--ec-bright));
+}
+.dm-edge.is-active .e-base {
+  stroke-opacity: 1;
+}
+.dm-edge.is-active .e-glow {
+  stroke-opacity: 0.25;
+}
+.dm-edge.is-active .e-flow {
+  stroke-opacity: 1;
+  animation: dash-flow 1.2s linear infinite;
+}
+.dm-edge.is-dim {
+  opacity: 0.08;
+}
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+/* ---- shimmer (skeletons) ---- */
+.dm-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-raised);
+}
+.dm-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 32%,
+    rgba(230, 232, 238, 0.055) 50%,
+    transparent 68%
+  );
+  background-size: 220% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 130% 0;
+  }
+  to {
+    background-position: -90% 0;
+  }
+}
+
+/* progress pill track fill */
+.dm-fill-breathe {
+  animation: fill-breathe 1.6s ease-in-out infinite;
+}
+@keyframes fill-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* one-shot relevance pulse (Phase-5 seam; unused until query mode lands) */
+.dm-pulse-once {
+  animation: pulse-once 600ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+@keyframes pulse-once {
+  0% {
+    box-shadow:
+      0 0 0 0 color-mix(in oklab, var(--tc) 45%, transparent),
+      0 6px 16px rgba(0, 0, 0, 0.25);
+  }
+  100% {
+    box-shadow:
+      0 0 0 16px color-mix(in oklab, var(--tc) 0%, transparent),
+      0 6px 16px rgba(0, 0, 0, 0.25);
+  }
+}
+
+/* overlap highlight in evidence excerpts — always accent violet */
+.dm-mark {
+  background: color-mix(in oklab, var(--color-accent) 24%, transparent);
+  color: #d4cbff;
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+/* ---- reduced motion: keep fades, kill movement/loops ---- */
+@media (prefers-reduced-motion: reduce) {
+  .dm-edge.is-active .e-flow,
+  .dm-shimmer::after,
+  .dm-fill-breathe,
+  .dm-pulse-once {
+    animation: none;
+  }
+  .dm-node,
+  .dm-canvas .react-flow__panel.bottom.right {
+    transition-duration: 0.01ms;
+  }
 }

@@ -15,6 +15,15 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${unit}`;
 }
 
+/** Truncate the middle of a long name, keeping the start and the extension end
+ *  ("competitor-research-2026-h1-deep-dive.pdf" → "competitor-re…-dive.pdf"). */
+export function middleEllipsis(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const keepEnd = Math.min(10, Math.floor((max - 1) / 2));
+  const keepStart = max - 1 - keepEnd;
+  return `${name.slice(0, keepStart)}…${name.slice(name.length - keepEnd)}`;
+}
+
 export function formatRelativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   const seconds = Math.round((Date.now() - then) / 1000);

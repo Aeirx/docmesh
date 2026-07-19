@@ -4,6 +4,7 @@
 import type {
   Document,
   EdgeDetail,
+  EdgeExplanation,
   ErrorResponse,
   GraphRecomputeResult,
   GraphResponse,
@@ -86,6 +87,18 @@ export function getEdgeDetail(source: string, target: string): Promise<EdgeDetai
 
 export function recomputeGraph(): Promise<GraphRecomputeResult> {
   return apiFetch<GraphRecomputeResult>("/api/graph/recompute", { method: "POST" });
+}
+
+/** Phase 4: on-demand edge explanation. GET despite generate-on-miss — the
+ *  backend treats generation as a cache fill; `refresh=true` regenerates.
+ *  First generation can take several seconds (local model); 429 is possible. */
+export function getEdgeExplanation(
+  source: string,
+  target: string,
+  opts?: { refresh?: boolean },
+): Promise<EdgeExplanation> {
+  const q = opts?.refresh ? "?refresh=true" : "";
+  return apiFetch<EdgeExplanation>(`/api/graph/edges/${source}/${target}/explanation${q}`);
 }
 
 /** SSE endpoints (consumed with EventSource — see hooks/useSse.ts). */

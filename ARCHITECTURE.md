@@ -456,3 +456,11 @@ Anthropic/OpenAI key anywhere in the app.**
 
 *(§26+ — the graph UI: react-flow + d3-force layout, custom nodes/edges, the
 explanation panel — lands with the frontend phase-4 task.)*
+
+## 26. Graph UI: react-flow + d3-force bridging (Phase 4b)
+
+- **Why d3-force over react-flow's built-in layout engines**: `react-flow` is excellent for rendering and dragging, but it lacks a true physics-based force-directed layout engine. `d3-force` provides the physics simulation (nodes repelling, links pulling together) necessary for an organic, Obsidian-style graph.
+- **The rAF-throttled bridge**: To prevent React from re-rendering the entire canvas on every single `d3-force` tick, the bridge updates React state only once per frame using `requestAnimationFrame`. The simulation mutates a reference in the background, and React renders at 60fps. This ensures high performance.
+- **Performance**: The combination of `d3-force` running in the background and React rendering fixed DOM nodes handles ~20-50 nodes flawlessly.
+- **Positions persistence**: Node positions are saved to `sessionStorage` keyed by a hash of the corpus. This ensures that if the user navigates away and back, the graph doesn't violently reshuffle. The simulation only reheats when a node is dragged (`alphaTarget(0.3)`), settling naturally afterwards.
+- **Phase-5 relevance-dim seam**: The UI components (`DocNode`, `ConnectionEdge`) are already pre-wired to accept a `dim` prop based on relevance scores. When search filtering is implemented in Phase 5, nodes that don't match the query will smoothly fade to 15% opacity.

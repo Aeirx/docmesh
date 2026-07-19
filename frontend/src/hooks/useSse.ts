@@ -43,8 +43,9 @@ export function useIngestionEvents(): Record<string, IngestionEvent> {
     setLatestByDoc((prev) => {
       if (TERMINAL_STATUSES.has(event.status)) {
         // Terminal: drop the live entry — the document row is authoritative now.
-        const { [event.document_id]: _dropped, ...rest } = prev;
-        return rest;
+        const next = { ...prev };
+        delete next[event.document_id];
+        return next;
       }
       return { ...prev, [event.document_id]: event };
     });

@@ -207,6 +207,25 @@ export interface EdgeDetail {
   top_pairs: HydratedPair[];
 }
 
+/* --- Phase 4: edge explanations (app/schemas/graph.py) ----------------------- */
+
+/** Mirrors app.schemas.graph.EdgeExplanation. `generator` (not `source`) labels
+ *  who wrote the text — `source` would clash with the edge's doc ids. */
+export interface EdgeExplanation {
+  edge_id: string;
+  source: string;
+  target: string;
+  explanation: string;
+  generator: "llm" | "template";
+  model: string;
+  cached: boolean;
+  generated_at: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  /** None (absent) on cache hits. */
+  duration_ms?: number | null;
+}
+
 export interface GraphRecomputeResult {
   document_count: number;
   edge_count: number;
