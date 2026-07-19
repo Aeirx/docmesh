@@ -151,8 +151,11 @@ export interface GraphNode {
   dominant_topic_id?: number | null;
   top_topics: TopicWeight[];
   top_entities: EntityWeight[];
-  /** Present only in query mode (max chunk cosine vs. the query; 0 = unhit). */
+  /** Query mode only: the doc's best chunk cosine vs. the query, CALIBRATED to
+   *  [0,1] server-side (same rescale as semantic edge scores; 0 = unrelated). */
   relevance?: number | null;
+  /** Query mode only: chunks of this doc scoring >= meta.relevance_threshold. */
+  match_count?: number | null;
 }
 
 export type DominantSignal = "semantic" | "entity" | "topic";
@@ -179,6 +182,11 @@ export interface GraphMeta {
   computed_at?: string | null;
   threshold: number;
   weights: Record<string, number>;
+  /** Query mode only: the echoed query string. */
+  query?: string | null;
+  /** Query mode only: the server's calibrated relevance cutoff — the single
+   *  source of truth for both server match counts and client dimming. */
+  relevance_threshold?: number | null;
 }
 
 export interface GraphResponse {

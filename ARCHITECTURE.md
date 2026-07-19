@@ -464,3 +464,30 @@ explanation panel — lands with the frontend phase-4 task.)*
 - **Performance**: The combination of `d3-force` running in the background and React rendering fixed DOM nodes handles ~20-50 nodes flawlessly.
 - **Positions persistence**: Node positions are saved to `sessionStorage` keyed by a hash of the corpus. This ensures that if the user navigates away and back, the graph doesn't violently reshuffle. The simulation only reheats when a node is dragged (`alphaTarget(0.3)`), settling naturally afterwards.
 - **Phase-5 relevance-dim seam**: The UI components (`DocNode`, `ConnectionEdge`) are already pre-wired to accept a `dim` prop based on relevance scores. When search filtering is implemented in Phase 5, nodes that don't match the query will smoothly fade to 15% opacity.
+
+## 27. Query-scoped subgraph: live graph filtering (Phase 5a)
+
+- **Per-node relevance = max (not mean) calibrated chunk cosine** among the query's
+  top-k FAISS hits. Max, because one strongly relevant section makes a document
+  relevant — a mean punishes long documents for their unrelated pages. Calibrated
+  with the **same** `semantic_floor/ceil` affine rescale as edge semantic scores
+  (`graph/semantic.py::calibrate`): bge's anisotropic space bottoms out near 0.5
+  for unrelated text, so a raw cosine has no true zero and the 0.35 dim threshold
+  would be meaningless against it. One calibration for the whole system — a "0.35"
+  means the same thing on an edge and on a query annotation.
+- **No reranker in the annotation path.** The cross-encoder exists to order a
+  top-10 list precisely; the filter needs a coarse lit/dim partition over <=20
+  nodes on every debounced keystroke. Max-cosine over dense hits costs ~20 ms;
+  a rerank pass would cost ~1 s per keystroke for no visible benefit.
+- **Edges dim client-side** (`both endpoints lit`), the endpoint stays
+  node-annotation-only: the brief's fade (not removal) means the client still
+  renders the whole structure at 15% opacity, so server-side filtering would
+  delete layout information the client needs anyway. The threshold ships once in
+  `meta.relevance_threshold`, so client dimming and server match counts can never
+  disagree. Non-query responses omit every query field (`exclude_none`) and stay
+  wire-identical to Phase 4 — no API break.
+- **Two-fetch frontend design**: the force layout keeps consuming the query-less
+  `useGraph()` response (stable identity — the d3 simulation never rebuilds on a
+  keystroke), while a second hook (`useGraphRelevance`, keyed by the debounced
+  query, `keepPreviousData`) feeds only the dim/badge/pulse pipeline. Typing
+  never blanks or reheats the graph; annotations swap in place.

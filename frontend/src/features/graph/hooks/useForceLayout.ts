@@ -101,6 +101,7 @@ export function useForceLayout(graph: GraphResponse | undefined): ForceLayout {
             topicColor: topicColor(n.dominant_topic_id),
             dim: false,
             selected: false,
+            pulseKey: null,
           },
         }),
       ),

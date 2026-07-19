@@ -35,6 +35,16 @@ class SemanticOverlap:
     top_pairs: list[tuple[str, str, float]]  # (chunk_id_a, chunk_id_b, cosine), desc
 
 
+def calibrate(raw: float, floor: float, ceil: float) -> float:
+    """Affine rescale of a raw bge cosine onto [0, 1], clamped.
+
+    One calibration for the whole system: edge semantic scores and Phase 5's
+    per-node query relevance both pass raw cosines through this same measured
+    floor/ceil, so a "0.35" means the same thing everywhere it appears.
+    """
+    return min(1.0, max(0.0, (raw - floor) / (ceil - floor)))
+
+
 def semantic_overlaps(
     docs: list[DocVectors], *, top_k: int, floor: float, ceil: float
 ) -> dict[tuple[str, str], SemanticOverlap]:
@@ -87,6 +97,6 @@ def semantic_overlaps(
                 )
                 for p in top
             ]
-            score = min(1.0, max(0.0, (raw - floor) / (ceil - floor)))
+            score = calibrate(raw, floor, ceil)
             out[(docs[i].doc_id, docs[j].doc_id)] = SemanticOverlap(score, raw, pairs)
     return out

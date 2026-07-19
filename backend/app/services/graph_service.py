@@ -32,7 +32,7 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.graph.combiner import combine, compute_params_hash, dominant_signal
 from app.graph.entities import EntityExtractor, EntityOverlap, EntityScorer
-from app.graph.semantic import DocVectors, SemanticOverlap, semantic_overlaps
+from app.graph.semantic import DocVectors, SemanticOverlap, calibrate, semantic_overlaps
 from app.graph.topics import TopicModel, fit_topics, topic_similarity
 from app.ingestion.broker import StatusBroker
 from app.schemas.documents import Chunk, Document, DocumentStatus
@@ -445,24 +445,40 @@ class GraphService:
         edges = await self._edges.list_all()
         current_hash = compute_params_hash(g)
 
-        # Query seam (basic version, deliberately node-annotation only): embed
-        # the query, take each doc's max chunk cosine among the top FAISS hits.
-        # No reranker, no edge filtering — Phase 5 layers subgraph filtering on
-        # the relevance field without an API break.
+        # Query mode (Phase 5): embed the query once, examine the top-k FAISS
+        # hits, and annotate every node with (a) relevance = its best chunk's
+        # CALIBRATED cosine — max, not mean, because one strongly relevant
+        # section makes a document relevant and a mean would punish long docs —
+        # and (b) match_count = how many of its chunks clear the threshold.
+        # Deliberately no reranker here: this paints a coarse lit/dim partition
+        # over <=20 nodes on every debounced keystroke, and a cross-encoder pass
+        # would turn a ~20 ms annotation into ~1 s. Edges are dimmed client-side
+        # from node relevance (both endpoints lit) so the endpoint stays
+        # node-annotation-only and the full graph structure remains visible.
         relevance: dict[str, float] | None = None
+        match_count: dict[str, int] | None = None
         if query:
             query_vec = await asyncio.to_thread(self._embedder.embed_query, query)
-            hits = await self._vectors.query(query_vec.tolist(), top_k=50)
+            hits = await self._vectors.query(query_vec.tolist(), top_k=g.query_top_k)
             hit_chunks = await self._chunks.get_many([h.chunk_id for h in hits])
             doc_of = {c.id: c.document_id for c in hit_chunks}
             relevance = {d.id: 0.0 for d in done_docs}
+            match_count = {d.id: 0 for d in done_docs}
             for hit in hits:
                 owner = doc_of.get(hit.chunk_id)
-                if owner in relevance:
-                    relevance[owner] = max(relevance[owner], hit.score)
+                if owner not in relevance:
+                    continue
+                # Same affine rescale as edge semantic scores — raw bge cosine
+                # bottoms out near 0.5 for unrelated text, so the client's 0.35
+                # dim threshold would be meaningless against raw values.
+                score = calibrate(hit.score, g.semantic_floor, g.semantic_ceil)
+                relevance[owner] = max(relevance[owner], score)
+                if score >= g.query_relevance_threshold:
+                    match_count[owner] += 1
 
         nodes = [
-            self._node(doc, analyses.get(doc.id), relevance) for doc in done_docs
+            self._node(doc, analyses.get(doc.id), relevance, match_count)
+            for doc in done_docs
         ]
         graph_edges = [self._edge_view(e, full_entities=False) for e in edges]
         # Stale = the stored graph was computed under a different config (or a
@@ -490,6 +506,8 @@ class GraphService:
                     "entity": g.entity_weight,
                     "topic": g.topic_weight,
                 },
+                query=query or None,
+                relevance_threshold=(g.query_relevance_threshold if query else None),
             ),
         )
 
@@ -517,6 +535,7 @@ class GraphService:
         doc: Document,
         analysis: DocumentAnalysis | None,
         relevance: dict[str, float] | None,
+        match_count: dict[str, int] | None,
     ) -> GraphNode:
         g = self._settings.graph
         return GraphNode(
@@ -530,6 +549,9 @@ class GraphService:
             top_entities=(analysis.entities[: g.top_entities_per_node] if analysis else []),
             relevance=(
                 round(relevance.get(doc.id, 0.0), 4) if relevance is not None else None
+            ),
+            match_count=(
+                match_count.get(doc.id, 0) if match_count is not None else None
             ),
         )
 

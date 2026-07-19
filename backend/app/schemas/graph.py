@@ -114,10 +114,13 @@ class GraphNode(BaseModel):
     dominant_topic_id: int | None = None
     top_topics: list[TopicWeight] = []
     top_entities: list[EntityWeight] = []  # capped at settings.graph.top_entities_per_node
-    # Query mode only: max cosine of this doc's chunks against the query vector,
-    # 0.0 for unhit docs, None (omitted) when no query was given. Phase 5's
-    # subgraph filtering layers on this field without an API break.
+    # Query mode only, None (omitted) otherwise. relevance: the doc's max chunk
+    # cosine against the query among the top-k FAISS hits, CALIBRATED to [0, 1]
+    # with the same floor/ceil rescale as semantic edge scores (raw bge cosine
+    # has no true zero — unrelated text sits near 0.5). match_count: how many of
+    # this doc's chunks in those hits score >= graph.query_relevance_threshold.
     relevance: float | None = None
+    match_count: int | None = None
 
 
 class GraphEdge(BaseModel):
@@ -145,6 +148,12 @@ class GraphMeta(BaseModel):
     computed_at: datetime | None  # max(edges.updated_at); None when no edges exist
     threshold: float
     weights: dict[str, float]
+    # Query mode only (omitted otherwise, keeping non-query responses
+    # wire-identical to Phase 4): the echoed query and the server's calibrated
+    # relevance cutoff — shipped so client dimming and server match counts can
+    # never disagree about the threshold.
+    query: str | None = None
+    relevance_threshold: float | None = None
 
 
 class GraphResponse(BaseModel):

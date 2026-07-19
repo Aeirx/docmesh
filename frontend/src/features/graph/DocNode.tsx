@@ -48,7 +48,7 @@ function FileGlyph({ fileType }: { fileType: FileType }) {
 }
 
 export const DocNode = memo(function DocNode({ data }: NodeProps<DocFlowNode>) {
-  const { node, topicColor, dim, selected } = data;
+  const { node, topicColor, dim, selected, matchCount, pulseKey } = data;
   const tier = sizeTier(node.size_bytes);
 
   return (
@@ -56,7 +56,7 @@ export const DocNode = memo(function DocNode({ data }: NodeProps<DocFlowNode>) {
       initial={{ opacity: 0, scale: 0.5, filter: "brightness(2) blur(4px)" }}
       animate={{ opacity: 1, scale: 1, filter: "brightness(1) blur(0px)" }}
       transition={{ duration: 0.6, type: "spring", bounce: 0.5 }}
-      className="w-full h-full"
+      className="relative h-full w-full"
     >
       <motion.div
         animate={{ y: [0, -4, 0] }}
@@ -78,8 +78,31 @@ export const DocNode = memo(function DocNode({ data }: NodeProps<DocFlowNode>) {
         <span className="n-badge" title={`${node.chunk_count} chunks`}>
           {node.chunk_count}
         </span>
+        {/* Query mode: how many of this doc's chunks match. Accent-tinted so it
+            reads as "query result", distinct from the topic-tinted chunk badge. */}
+        {!dim && matchCount !== undefined && matchCount > 0 && (
+          <span
+            className="n-badge n-match"
+            title={`${matchCount} chunk${matchCount === 1 ? "" : "s"} match the query`}
+          >
+            {matchCount}
+          </span>
+        )}
         <Handle type="source" position={Position.Bottom} className="dm-handle" isConnectable={false} />
       </motion.div>
+      {/* One-shot pulse when a query lands: keyed by the query so a NEW query
+          remounts the overlay and re-fires the animation. Lives OUTSIDE
+          .dm-node (overflow:hidden would clip the expanding ring) and carries
+          its own --tc since it isn't a .dm-node descendant. The container is
+          NOT keyed — that would replay the spawn animation. */}
+      {!dim && pulseKey && (
+        <span
+          key={pulseKey}
+          aria-hidden="true"
+          className="dm-pulse-once pointer-events-none absolute inset-0 rounded-[10px]"
+          style={{ "--tc": topicColor } as React.CSSProperties}
+        />
+      )}
     </motion.div>
   );
 });

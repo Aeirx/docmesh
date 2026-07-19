@@ -76,6 +76,14 @@ class GraphSettings(BaseModel):
     # Display cap for node entity chips. NOT in SCORING_FIELDS: changing what the
     # API shows must not invalidate the stored graph.
     top_entities_per_node: int = 10
+    # Phase 5 query-scoped subgraph knobs — display/query behaviour, NOT in
+    # SCORING_FIELDS (annotating nodes with relevance must never mark the stored
+    # edge graph stale, same rule as top_entities_per_node).
+    query_top_k: int = 50  # FAISS hits examined for node relevance/match counts
+    # Calibrated-relevance cutoff: a chunk at/above it "matches" the query. Echoed
+    # to the client in GraphMeta so server match counts and client dimming can
+    # never disagree about what "lit" means.
+    query_relevance_threshold: float = Field(0.35, ge=0, le=1)
 
     @model_validator(mode="after")
     def _calibration_range(self) -> "GraphSettings":

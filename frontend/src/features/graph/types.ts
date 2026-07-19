@@ -13,11 +13,17 @@ export interface DocNodeData extends Record<string, unknown> {
   node: GraphNode;
   /** Resolved dominant-topic hex, injected as the `--tc` CSS var. */
   topicColor: string;
-  /** Phase-5 relevance seam: true fades the node to 15% (query-filter mode).
-   *  GraphPage computes this from a relevanceById map that is empty in Phase 4. */
+  /** Query-filter mode: true fades the node to 15%. Computed by GraphPage from
+   *  the relevance map (below threshold => dim); false when no query is active. */
   dim: boolean;
   /** Our own selection (not react-flow's) — same glow treatment as hover. */
   selected: boolean;
+  /** Query mode: chunks of this doc matching the query (undefined = no query).
+   *  Rendered as the accent match badge on lit nodes. */
+  matchCount?: number;
+  /** Non-null while a query is active; keys the one-shot pulse overlay so a NEW
+   *  query remounts it and re-fires the animation (null = no pulse). */
+  pulseKey: string | null;
 }
 
 export interface ConnectionEdgeData extends Record<string, unknown> {

@@ -10,9 +10,11 @@ import type { GraphEdge, GraphRecomputeResult } from "../../types/api";
 import { GraphCanvas } from "./GraphCanvas";
 import { GraphLegend } from "./GraphLegend";
 import { GraphMetaBar } from "./GraphMetaBar";
+import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useForceLayout } from "./hooks/useForceLayout";
 import { GRAPH_QUERY_KEY, useGraph } from "./hooks/useGraph";
 import { useGraphProgress } from "./hooks/useGraphProgress";
+import { useGraphRelevance } from "./hooks/useGraphRelevance";
 import { EdgePanel } from "./panels/EdgePanel";
 import { NodePanel } from "./panels/NodePanel";
 import { canonicalPair, type Selection } from "./types";
@@ -121,6 +123,14 @@ export function GraphPage() {
 
   const [selection, setSelection] = useState<Selection | null>(null);
 
+  // Query filter (Phase 5): the debounced text drives a SECOND fetch for
+  // relevance annotations only — the layout keeps consuming the query-less
+  // graph, so the d3 simulation never rebuilds on a keystroke.
+  const [filterQuery, setFilterQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(filterQuery.trim(), 300);
+  const relevanceQuery = useGraphRelevance(debouncedQuery);
+  const rel = debouncedQuery ? relevanceQuery.data : undefined;
+
   const recompute = useMutation<GraphRecomputeResult, ApiError, void>({
     mutationFn: () => recomputeGraph(),
     onSuccess: () => {
@@ -135,21 +145,33 @@ export function GraphPage() {
     [graph],
   );
 
-  /** Phase-5 relevance seam: when query mode lands, this map fills from
-   *  getGraph(query) relevance scores and low-relevance nodes dim. Empty in
-   *  Phase 4 — nothing dims — but the whole dim pipeline is live. */
-  const relevanceById = useMemo<Record<string, number>>(() => ({}), []);
+  const litById = useMemo(() => {
+    if (rel === undefined) return null;
+    const lit = new Set<string>();
+    for (const [id, score] of Object.entries(rel.relevanceById)) {
+      if (score >= rel.threshold) lit.add(id);
+    }
+    return lit;
+  }, [rel]);
 
   const displayNodes = useMemo(
     () =>
       layout.nodes.map((n) => {
-        const relevance = relevanceById[n.id];
-        const dim = relevance !== undefined && relevance < 0.35;
+        const dim = litById !== null && !litById.has(n.id);
         const selected = selection?.kind === "node" && selection.id === n.id;
-        if (n.data.dim === dim && n.data.selected === selected) return n;
-        return { ...n, data: { ...n.data, dim, selected } };
+        const matchCount = rel !== undefined ? (rel.matchCountById[n.id] ?? 0) : undefined;
+        const pulseKey = rel !== undefined ? debouncedQuery : null;
+        if (
+          n.data.dim === dim &&
+          n.data.selected === selected &&
+          n.data.matchCount === matchCount &&
+          n.data.pulseKey === pulseKey
+        ) {
+          return n;
+        }
+        return { ...n, data: { ...n.data, dim, selected, matchCount, pulseKey } };
       }),
-    [layout.nodes, selection, relevanceById],
+    [layout.nodes, selection, litById, rel, debouncedQuery],
   );
 
   const displayEdges = useMemo(
@@ -157,11 +179,17 @@ export function GraphPage() {
       layout.edges.map((e) => {
         const selected =
           selection?.kind === "edge" && samePair(e.data!.edge, selection.source, selection.target);
-        if (e.data!.selected === selected) return e;
-        return { ...e, data: { ...e.data!, selected } };
+        // An edge stays lit only when BOTH endpoints survive the filter — a
+        // connection into a dimmed doc is itself irrelevant to the query.
+        const dim = litById !== null && !(litById.has(e.source) && litById.has(e.target));
+        if (e.data!.selected === selected && e.data!.dim === dim) return e;
+        return { ...e, data: { ...e.data!, selected, dim } };
       }),
-    [layout.edges, selection],
+    [layout.edges, selection, litById],
   );
+
+  const noMatches =
+    litById !== null && litById.size === 0 && !relevanceQuery.isFetching;
 
   const selectedEdge = useMemo(
     () =>
@@ -182,7 +210,12 @@ export function GraphPage() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelection(null);
+      if (event.key !== "Escape") return;
+      // Escape peels back one layer at a time: open panel first, then filter.
+      setSelection((current) => {
+        if (current === null) setFilterQuery("");
+        return null;
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -223,7 +256,17 @@ export function GraphPage() {
         progress={progress}
         recomputing={recompute.isPending}
         onRecompute={() => recompute.mutate()}
+        filterQuery={filterQuery}
+        onFilterChange={setFilterQuery}
+        filtering={debouncedQuery.length > 0 && relevanceQuery.isFetching}
       />
+      {noMatches && (
+        <div className="dm-glass absolute left-1/2 top-[76px] z-40 -translate-x-1/2 rounded-full px-4 py-2 text-xs text-muted shadow-[0_8px_24px_rgba(0,0,0,.25)]">
+          No documents match <span className="font-medium text-text">“{debouncedQuery}”</span>
+          <span className="mx-2 inline-block size-[3px] rounded-full bg-muted/50 align-middle" />
+          Esc to clear
+        </div>
+      )}
       <GraphLegend nodes={graph.nodes} />
 
       <AnimatePresence>

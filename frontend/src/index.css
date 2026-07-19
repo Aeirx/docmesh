@@ -291,6 +291,12 @@ body {
   font-size: 9px;
   padding: 3px 6px;
 }
+/* query-mode match badge — accent-tinted ("query result"), never topic-tinted */
+.dm-node .n-match {
+  margin-left: 4px;
+  background: color-mix(in oklab, var(--color-accent) 20%, transparent);
+  color: color-mix(in oklab, var(--color-accent) 80%, #fff);
+}
 /* invisible center handles — edges connect center-to-center */
 .dm-handle.react-flow__handle {
   opacity: 0;
