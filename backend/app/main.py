@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import documents, events, graph, health, search
+from app.api.routes import ask, documents, events, graph, health, search
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
@@ -330,6 +330,7 @@ def create_app() -> FastAPI:
     app.include_router(search.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
     app.include_router(graph.router, prefix="/api")
+    app.include_router(ask.router, prefix="/api")
     return app
 
 

@@ -76,3 +76,81 @@ async def test_real_generation_over_edge_prompt() -> None:
         f"in_tokens={result.input_tokens} out_tokens={result.output_tokens}\n"
         f"explanation={text!r}"
     )
+
+
+@pytest.mark.slow
+async def test_real_qa_over_small_corpus() -> None:
+    """The brief's grounded-QA test with the true Qwen model: build a QA prompt
+    from in-memory hits, generate, verify at least one citation survives
+    verification. No app needed — this exercises prompt + model + parser."""
+    pytest.importorskip("llama_cpp")
+    from app.core.config import AskSettings
+    from app.llm.interface import LLMUnavailableError
+    from app.llm.local_llama import LocalLlamaClient
+    from app.llm.qa_prompt import build_qa_messages, parse_citations, postprocess_answer
+    from app.schemas.search import SearchHit
+
+    def _hit(rank: int, filename: str, text: str) -> SearchHit:
+        return SearchHit(
+            rank=rank,
+            chunk_id=f"chunk-{rank}",
+            document_id=f"doc-{rank}",
+            filename=filename,
+            text=text,
+            page_start=1,
+            page_end=None,
+            section=None,
+            dense_score=0.9,
+            bm25_score=1.2,
+            fused_score=0.02,
+            rerank_score=6.0,
+            term_highlights=[],
+            best_sentence=None,
+        )
+
+    hits = [
+        _hit(
+            1,
+            "zephyrium-product.txt",
+            "Zephyrium Corporation announced a quantum encryption product line. "
+            "The product uses lattice cryptography for post-quantum key exchange.",
+        ),
+        _hit(
+            2,
+            "zephyrium-review.txt",
+            "An independent security review of Zephyrium Corporation found the "
+            "lattice parameter choices weaken the advertised security margins.",
+        ),
+    ]
+
+    ask_cfg = AskSettings()
+    # The question must be LITERALLY answerable from passage [1]: a strictly
+    # grounded small model takes the mandated no-answer escape hatch on
+    # questions needing an inference leap ("what do they sell?" vs. "announced
+    # a product line") — which is the grounding contract working, not a bug.
+    ctx = build_qa_messages("What did Zephyrium Corporation announce?", hits, ask_cfg)
+
+    client = LocalLlamaClient(LLMSettings(), _MODELS_DIR)
+    started = time.perf_counter()
+    try:
+        result = await client.complete(
+            ctx.messages,
+            max_tokens=ask_cfg.max_tokens,
+            temperature=ask_cfg.temperature,
+            top_p=ask_cfg.top_p,
+        )
+    except LLMUnavailableError as exc:
+        pytest.skip(f"local model unavailable: {exc}")
+    finally:
+        client.close()
+    elapsed_s = time.perf_counter() - started
+
+    answer, markers = parse_citations(postprocess_answer(result.text), ctx.included)
+    assert answer, "real model produced empty QA output"
+    assert len(markers) >= 1, f"expected at least one verified citation in: {answer!r}"
+    print(  # noqa: T201 - real latency + output quality for the report
+        f"\nreal_qa latency_s={elapsed_s:.1f} "
+        f"in_tokens={result.input_tokens} out_tokens={result.output_tokens} "
+        f"citations={markers}\n"
+        f"answer={answer!r}"
+    )

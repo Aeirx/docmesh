@@ -112,6 +112,24 @@ class LLMSettings(BaseModel):
     warm: bool = False  # load (and maybe download) the model at startup
 
 
+class AskSettings(BaseModel):
+    """Phase 5 grounded-QA knobs. Same char-heuristic budget discipline as
+    llm/prompt.py (~3.5 chars/token), sized so system (~200 tok) + question
+    (<=285 tok) + context (<=2500 tok) + answer (400 tok) fits n_ctx=4096 with
+    ~700 tokens of headroom even when the heuristic runs 25% hot."""
+
+    top_k: int = 6  # reranked chunks offered as context
+    # ~400 tokens — matches chunking.target_tokens, so truncation is rare and a
+    # cited passage is almost always shown whole.
+    chunk_char_budget: int = 1400
+    context_char_budget: int = 9000  # hard cap across all included chunks
+    max_tokens: int = 400
+    # Slightly above the explainer's 0.2: less loop/repetition over a longer
+    # answer, still conservative enough to stay grounded in the context.
+    temperature: float = Field(0.3, ge=0, le=2)
+    top_p: float = Field(0.9, gt=0, le=1)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DOCMESH_",
@@ -132,6 +150,7 @@ class Settings(BaseSettings):
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    ask: AskSettings = Field(default_factory=AskSettings)
 
     @property
     def uploads_dir(self) -> Path:

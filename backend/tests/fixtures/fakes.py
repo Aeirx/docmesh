@@ -99,6 +99,12 @@ class FakeLLM:
     def __init__(self, cfg=None, models_dir=None) -> None:
         self.calls = 0
         self.fail_unavailable = False
+        # Settable per-test (ask tests need [n] citation markers; the default
+        # keeps the Phase-4 explanation tests byte-identical).
+        self.canned_text = (
+            "Both documents cover Alpha. The first is a tutorial; "
+            "the second is a benchmark."
+        )
 
     @property
     def model_id(self) -> str:
@@ -116,10 +122,7 @@ class FakeLLM:
         if self.fail_unavailable:
             raise LLMUnavailableError("fake-llm marked unavailable")
         return LLMResult(
-            text=(
-                "Both documents cover Alpha. The first is a tutorial; "
-                "the second is a benchmark."
-            ),
+            text=self.canned_text,
             input_tokens=50,
             output_tokens=20,
             model_id="fake-llm",

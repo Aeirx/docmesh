@@ -1,9 +1,8 @@
-import { MessageCircleQuestion } from "lucide-react";
 import { lazy, Suspense } from "react";
 import { createBrowserRouter, Navigate } from "react-router";
 
-import { ComingSoon } from "./components/ComingSoon";
 import { Shell } from "./components/layout/Shell";
+import { AskPage } from "./features/ask/AskPage";
 import { DocumentsPage } from "./features/documents/DocumentsPage";
 import { SearchPage } from "./features/search/SearchPage";
 
@@ -29,17 +28,7 @@ export const router = createBrowserRouter([
           </Suspense>
         ),
       },
-      {
-        path: "ask",
-        element: (
-          <ComingSoon
-            icon={MessageCircleQuestion}
-            title="Ask your corpus"
-            phase={5}
-            blurb="Grounded answers with chunk-level citations, powered by a local LLM over your own retrieval pipeline."
-          />
-        ),
-      },
+      { path: "ask", element: <AskPage /> },
       { path: "*", element: <Navigate to="/documents" replace /> },
     ],
   },

@@ -491,3 +491,48 @@ explanation panel — lands with the frontend phase-4 task.)*
   keystroke), while a second hook (`useGraphRelevance`, keyed by the debounced
   query, `keepPreviousData`) feeds only the dim/badge/pulse pipeline. Typing
   never blanks or reheats the graph; annotations swap in place.
+
+## 28. Ask-the-Corpus: grounded QA over the local model (Phase 5b)
+
+- **Retrieval is the Phase-2 pipeline verbatim.** `AnswerService` calls
+  `SearchService.search()` — embed -> FAISS + BM25 -> RRF -> hydrate ->
+  cross-encoder rerank — with zero duplicated ranking logic; per-stage timings
+  ride along into the response.
+- **Citation scheme: numeric `[n]` mapped to evidence ranks.** A 1.5B model
+  copies a 3-char token far more reliably than a `[file.pdf:14]` marker (those
+  get paraphrased or invented); numbers are collision-free and validated against
+  the closed set `1..len(included)`; the frontend parses one regex; and the
+  marker doubles as the evidence-panel rank, so chip and panel row line up with
+  zero mapping logic.
+- **Citations are VERIFIED, not trusted.** `parse_citations` checks every
+  emitted marker against the set of chunks actually inside the prompt: markers
+  outside it are hallucinated provenance and get stripped from the text and the
+  list. A citation that renders is, by construction, a real retrieved chunk —
+  shown with doc/page beside the answer in a never-hidden evidence panel.
+- **Grounding contract**: the system prompt restricts the model to the numbered
+  `<context>` passages, mandates a verbatim no-answer sentence, and generation
+  runs at temperature 0.3 with a 400-token cap. Observed in testing: the model
+  takes the escape hatch on questions needing an inference leap ("what do they
+  sell?" vs "announced a product line") — that is the contract working, and the
+  honest demo story. A terse-model failure mode (answering with just "[1]") was
+  observed and fixed by demanding complete sentences in the prompt tail.
+- **Prompt injection posture (QA)**: retrieved text is fenced in `<context>` and
+  demoted to data by instruction — hygiene, not a boundary. The boundary is
+  structural: no tools, no network, no state; output rendered as escaped text;
+  provenance unforgeable via citation verification. Residual risk stated: an
+  embedded instruction can skew one answer's prose, next to visible evidence
+  that contradicts it.
+- **No answer cache** (unlike edge explanations): questions are free-form with
+  unbounded cardinality and near-zero exact-repeat probability, and any
+  persistent cache would need invalidation on every corpus change. The token
+  bucket bounds re-ask cost; TanStack Query dedups literal client re-submits.
+  No cache -> no table -> no migration in Phase 5.
+- **One shared token bucket** with the explanation endpoint: both protect the
+  same physical resource (CPU-bound llama.cpp inference behind one lock); two
+  buckets would stack 2x rpm onto one core.
+- **Graceful-degrade ladder**: `llm` -> `unavailable` (model missing/failed;
+  the retrieval is still returned and shown) -> `no_evidence` (zero hits; the
+  model never runs — answering from nothing is parametric hallucination by
+  construction). Never a 500. Token streaming is a future seam
+  (`LLMClient.stream()` + SSE), deliberately not built: one bounded synchronous
+  generation with an honest client loading state is simpler and sufficient.

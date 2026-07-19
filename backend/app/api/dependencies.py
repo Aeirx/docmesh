@@ -13,6 +13,7 @@ from app.llm.interface import LLMClient
 from app.search.bm25 import BM25Index
 from app.search.embedder import DenseEmbedder
 from app.search.reranker import Reranker
+from app.services.answer_service import AnswerService
 from app.services.document_service import DocumentService
 from app.services.explanation_service import ExplanationService
 from app.services.graph_service import GraphService
@@ -120,4 +121,17 @@ def get_search_service(request: Request) -> SearchService:
         chunk_repo=request.app.state.chunk_repo,
         doc_repo=request.app.state.document_repo,
         settings=request.app.state.settings,
+    )
+
+
+def get_answer_service(request: Request) -> AnswerService:
+    # Per-request construction of a stateless service over app.state singletons,
+    # same pattern as get_search_service / get_explanation_service. The bucket
+    # is SHARED with the explanation endpoint on purpose — see AnswerService's
+    # module docstring.
+    return AnswerService(
+        settings=request.app.state.settings,
+        search=get_search_service(request),
+        llm=request.app.state.llm_client,
+        bucket=request.app.state.llm_ratelimit,
     )

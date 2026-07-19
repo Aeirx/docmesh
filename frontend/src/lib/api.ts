@@ -2,6 +2,8 @@
  *  where XMLHttpRequest is used because fetch still has no upload progress events. */
 
 import type {
+  AskRequest,
+  AskResponse,
   Document,
   EdgeDetail,
   EdgeExplanation,
@@ -99,6 +101,16 @@ export function getEdgeExplanation(
 ): Promise<EdgeExplanation> {
   const q = opts?.refresh ? "?refresh=true" : "";
   return apiFetch<EdgeExplanation>(`/api/graph/edges/${source}/${target}/explanation${q}`);
+}
+
+/** Phase 5: grounded QA over the corpus. Synchronous — local-CPU generation
+ *  takes 5-30 s (the model loads once); 429 with Retry-After is possible. */
+export function ask(request: AskRequest): Promise<AskResponse> {
+  return apiFetch<AskResponse>("/api/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
 }
 
 /** SSE endpoints (consumed with EventSource — see hooks/useSse.ts). */

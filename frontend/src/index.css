@@ -420,6 +420,21 @@ body {
   }
 }
 
+/* citation-click flash on an evidence card: accent wash fading out */
+.dm-cite-flash {
+  animation: cite-flash 1.2s ease-out 1;
+}
+@keyframes cite-flash {
+  0% {
+    background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+    border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  }
+  100% {
+    background: transparent;
+    border-color: var(--color-border);
+  }
+}
+
 /* overlap highlight in evidence excerpts — always accent violet */
 .dm-mark {
   background: color-mix(in oklab, var(--color-accent) 24%, transparent);

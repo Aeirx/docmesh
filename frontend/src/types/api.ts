@@ -240,3 +240,45 @@ export interface GraphRecomputeResult {
   duration_ms: number;
   params_hash: string;
 }
+
+/* --- Phase 5: Ask-the-Corpus (app/schemas/ask.py) ---------------------------- */
+
+export interface AskRequest {
+  question: string;
+  top_k?: number;
+}
+
+/** One VERIFIED inline citation — marker == the evidence rank it points at. */
+export interface Citation {
+  marker: number;
+  chunk_id: string;
+  document_id: string;
+  filename: string;
+  page_start?: number | null;
+  page_end?: number | null;
+  section?: string | null;
+}
+
+export interface AskTimings {
+  retrieval: SearchTimings;
+  generate_ms: number;
+  total_ms: number;
+}
+
+export interface AskResponse {
+  question: string;
+  /** "" unless generator === "llm". */
+  answer: string;
+  /** Graceful-degrade ladder: llm -> unavailable (evidence still returned) ->
+   *  no_evidence (zero hits; the model never ran). */
+  generator: "llm" | "unavailable" | "no_evidence";
+  model?: string | null;
+  citations: Citation[];
+  /** The FULL retrieved set — the retrieval is never hidden. */
+  evidence: SearchHit[];
+  /** How many evidence hits were actually inside the prompt. */
+  context_chunks: number;
+  timings: AskTimings;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+}
