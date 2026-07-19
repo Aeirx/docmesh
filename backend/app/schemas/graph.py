@@ -171,12 +171,53 @@ class HydratedPair(BaseModel):
 
 
 class EdgeDetail(BaseModel):
-    """Full evidence for one edge. Phase 4 seam: the LLM explanation will hang off
-    edge.id as a sub-resource — the edge_explanations table and this stable id
-    already exist."""
+    """Full evidence for one edge. The Phase 4 seam landed: the LLM explanation
+    hangs off the edge as the /edges/{source}/{target}/explanation sub-resource,
+    persisted in edge_explanations."""
 
     edge: GraphEdge  # with the FULL shared_entities list here
     top_pairs: list[HydratedPair]
+
+
+class EdgeExplanationCreate(BaseModel):
+    """Internal write model for one cached explanation row. Token counts are
+    None for template renders (no model ran)."""
+
+    cache_key: str
+    edge_id: str | None
+    model: str
+    explanation: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class EdgeExplanationRecord(EdgeExplanationCreate):
+    """Full read model."""
+
+    id: int
+    created_at: datetime
+
+    _utc = field_validator("created_at")(_as_utc)
+
+
+class EdgeExplanation(BaseModel):
+    """Phase 4 wire model: the sub-resource promised in the EdgeDetail seam
+    comment. 'generator' (not 'source') labels who wrote the text — 'source'
+    would clash with the edge's source/target doc ids."""
+
+    edge_id: str
+    source: str  # canonical doc ids, echoed for the client
+    target: str
+    explanation: str
+    generator: Literal["llm", "template"]
+    model: str
+    cached: bool
+    generated_at: datetime
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    duration_ms: float | None = None  # None on cache hit
+
+    _utc = field_validator("generated_at")(_as_utc)
 
 
 class GraphRecomputeResult(BaseModel):

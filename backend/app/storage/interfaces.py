@@ -18,7 +18,14 @@ from app.schemas.documents import (
     DocumentStatus,
     IngestionEvent,
 )
-from app.schemas.graph import DocumentAnalysis, DocumentAnalysisCreate, Edge, EdgeCreate
+from app.schemas.graph import (
+    DocumentAnalysis,
+    DocumentAnalysisCreate,
+    Edge,
+    EdgeCreate,
+    EdgeExplanationCreate,
+    EdgeExplanationRecord,
+)
 
 
 class DocumentRepository(ABC):
@@ -146,6 +153,29 @@ class EdgeRepository(ABC):
         """WHERE source=:id OR target=:id. The FK CASCADE already covers document
         deletion; this exists for tests and manual surgery."""
         ...
+
+
+class ExplanationRepository(ABC):
+    """Cache of generated edge explanations, keyed by content-derived cache_key.
+
+    Stale rows (superseded evidence) become unreachable garbage with
+    edge_id=NULL and are deliberately not pruned: they are small text rows,
+    bounded by (pairs × models × prompt versions), and pruning by
+    `edge_id IS NULL` would be WRONG immediately after a recompute —
+    identical-evidence rows are momentarily unpointed but still live.
+    """
+
+    @abstractmethod
+    async def get_by_cache_key(self, cache_key: str) -> EdgeExplanationRecord | None: ...
+
+    @abstractmethod
+    async def upsert(self, item: EdgeExplanationCreate) -> EdgeExplanationRecord:
+        """Insert-or-replace by cache_key: delete-then-insert in one transaction
+        (the codebase's dialect-neutral upsert idiom — see SqlEdgeRepository)."""
+        ...
+
+    @abstractmethod
+    async def delete_for_edge(self, edge_id: str) -> int: ...
 
 
 class DocumentAnalysisRepository(ABC):

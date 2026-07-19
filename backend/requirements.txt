@@ -28,5 +28,12 @@ spacy==3.8.4
 scikit-learn==1.6.1
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
-# --- Phase 4+ (do not install yet) ---
-# anthropic==0.49.0
+# --- Phase 4: local LLM explanations (CPU-only, no API keys). llama-cpp-python
+#     ships NO wheels on PyPI (sdist -> CMake/MSVC build); the project's own
+#     index below carries prebuilt CPU wheels — 0.3.34 has universal py3-none
+#     wheels for win_amd64 AND manylinux x86_64/aarch64, so neither the Windows
+#     dev machine nor the Linux Docker image needs a compiler. Verified install:
+#     "Downloading llama_cpp_python-0.3.34-py3-none-win_amd64.whl". ---
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python==0.3.34
+huggingface_hub==0.34.4  # explicit pin; already transitive via transformers

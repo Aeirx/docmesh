@@ -2,8 +2,7 @@
 
 Everything configurable lives here, loaded from the environment (prefix ``DOCMESH_``,
 nested fields via ``__``, e.g. ``DOCMESH_SEARCH__RRF_K=60``) with an optional ``.env``
-file. ``ANTHROPIC_API_KEY`` is deliberately un-prefixed so the standard Anthropic SDK
-variable name works; its absence is a graceful degrade, never an error.
+file.
 """
 
 from functools import lru_cache
@@ -85,12 +84,24 @@ class GraphSettings(BaseModel):
         return self
 
 
-class ClaudeSettings(BaseModel):
-    """Phase 4 LLM knobs."""
+class LLMSettings(BaseModel):
+    """Phase 4 local-LLM knobs. NOT in the graph params_hash — explanations
+    carry their own cache keys (model + evidence signature). Swapping to a
+    bigger GGUF is repo_id/filename (or model_path) — one env var, nothing
+    else moves."""
 
-    model: str = "claude-sonnet-4-6"
-    max_tokens: int = 1024
-    rpm_limit: int = 10
+    enabled: bool = True  # False -> template explanations only
+    repo_id: str = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+    filename: str = "qwen2.5-1.5b-instruct-q4_k_m.gguf"  # ~1.0 GB
+    model_path: str | None = None  # absolute local .gguf; skips download
+    auto_download: bool = True  # False -> offline: missing file degrades to template
+    n_ctx: int = 4096
+    n_threads: int | None = None  # None -> llama.cpp picks physical cores
+    max_tokens: int = 220
+    temperature: float = Field(0.2, ge=0, le=2)
+    top_p: float = Field(0.9, gt=0, le=1)
+    rpm_limit: int = 6  # token bucket: capacity AND refill per minute
+    warm: bool = False  # load (and maybe download) the model at startup
 
 
 class Settings(BaseSettings):
@@ -107,15 +118,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/docmesh.db"
     max_upload_mb: int = 25
     cors_origins: list[str] = ["http://localhost:5173"]
-    # validation_alias bypasses the DOCMESH_ prefix: the SDK-standard name is read as-is.
-    # None means "LLM features unavailable", handled at call sites — never a startup error.
-    anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
 
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
     graph: GraphSettings = Field(default_factory=GraphSettings)
-    claude: ClaudeSettings = Field(default_factory=ClaudeSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
 
     @property
     def uploads_dir(self) -> Path:
@@ -129,12 +137,17 @@ class Settings(BaseSettings):
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
 
+    @property
+    def models_dir(self) -> Path:
+        return self.data_dir / "models"
+
     @model_validator(mode="after")
     def _ensure_data_dirs(self) -> "Settings":
         # Creating the dirs at settings-construction time means every entry point
         # (app, alembic, tests) gets a usable data dir without repeating mkdir logic.
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.faiss_index_path.parent.mkdir(parents=True, exist_ok=True)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         return self
 
 

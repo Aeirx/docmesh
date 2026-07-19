@@ -1,5 +1,6 @@
-# Runtime data (SQLite DB, uploaded files, vector index)
+# Runtime data (SQLite DB, uploaded files, vector index, GGUF models)
 data/
+*.gguf
 
 # Secrets
 .env

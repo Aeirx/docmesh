@@ -7,8 +7,14 @@ synchronous 200 is simpler and more honest than a job-id dance."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.dependencies import get_graph_service
-from app.schemas.graph import EdgeDetail, GraphRecomputeResult, GraphResponse
+from app.api.dependencies import get_explanation_service, get_graph_service
+from app.schemas.graph import (
+    EdgeDetail,
+    EdgeExplanation,
+    GraphRecomputeResult,
+    GraphResponse,
+)
+from app.services.explanation_service import ExplanationService
 from app.services.graph_service import GraphService
 
 router = APIRouter(prefix="/graph", tags=["graph"])
@@ -34,6 +40,27 @@ async def get_edge_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail=f"No edge between {source} and {target}")
     return detail
+
+
+@router.get("/edges/{source}/{target}/explanation", response_model=EdgeExplanation)
+async def get_edge_explanation(
+    source: str,
+    target: str,
+    refresh: bool = Query(False),
+    service: ExplanationService = Depends(get_explanation_service),
+) -> EdgeExplanation:
+    """GET despite generate-on-miss: the client asks for "the explanation of
+    this edge" — a derived, cacheable representation; generation is a cache-fill
+    implementation detail (a CDN cold miss). Repeat-safe by cache key;
+    ?refresh=true is the deliberate regenerate knob. Synchronous, no streaming —
+    one bounded generation (max_tokens-capped); if streaming ever matters,
+    LLMClient grows a stream() method and this becomes an SSE endpoint without
+    touching the service. 429 (rate_limited) when a generation token is needed
+    and the bucket is empty."""
+    result = await service.explain(source, target, refresh=refresh)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No edge between {source} and {target}")
+    return result
 
 
 @router.post("/recompute", response_model=GraphRecomputeResult)

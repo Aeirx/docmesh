@@ -17,6 +17,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from app.graph.entities import normalize_entity
+from app.llm.interface import ChatMessage, LLMResult, LLMUnavailableError
 from app.search.bm25 import tokenize
 
 _token_vectors: dict[str, np.ndarray] = {}
@@ -87,6 +88,45 @@ class FakeEntityExtractor:
                 key = (norm, "ORG")
                 counts[key] = counts.get(key, 0) + 1
         return counts
+
+
+class FakeLLM:
+    """Deterministic stand-in for LocalLlamaClient — same constructor shape, so
+    app.main's by-name construction works unchanged. Counts calls so cache-hit
+    tests can assert "generated exactly once"; set ``fail_unavailable = True``
+    on an instance to exercise the template-fallback path."""
+
+    def __init__(self, cfg=None, models_dir=None) -> None:
+        self.calls = 0
+        self.fail_unavailable = False
+
+    @property
+    def model_id(self) -> str:
+        return "fake-llm"
+
+    async def complete(
+        self,
+        messages: list[ChatMessage],
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> LLMResult:
+        self.calls += 1
+        if self.fail_unavailable:
+            raise LLMUnavailableError("fake-llm marked unavailable")
+        return LLMResult(
+            text=(
+                "Both documents cover Alpha. The first is a tutorial; "
+                "the second is a benchmark."
+            ),
+            input_tokens=50,
+            output_tokens=20,
+            model_id="fake-llm",
+        )
+
+    def close(self) -> None:
+        pass
 
 
 class FakeReranker:

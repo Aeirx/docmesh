@@ -9,10 +9,12 @@ from fastapi import Request
 from app.core.config import Settings
 from app.ingestion.broker import StatusBroker
 from app.ingestion.queue import IngestionQueue
+from app.llm.interface import LLMClient
 from app.search.bm25 import BM25Index
 from app.search.embedder import DenseEmbedder
 from app.search.reranker import Reranker
 from app.services.document_service import DocumentService
+from app.services.explanation_service import ExplanationService
 from app.services.graph_service import GraphService
 from app.services.search_service import SearchService
 from app.storage.interfaces import (
@@ -87,6 +89,25 @@ def get_document_service(request: Request) -> DocumentService:
         vector_store=request.app.state.vector_store,
         bm25=request.app.state.bm25,
         graph_service=request.app.state.graph_service,
+    )
+
+
+def get_llm_client(request: Request) -> LLMClient | None:
+    return request.app.state.llm_client
+
+
+def get_explanation_service(request: Request) -> ExplanationService:
+    # Per-request construction of a stateless service over app.state singletons —
+    # the exact DocumentService/SearchService pattern.
+    return ExplanationService(
+        settings=request.app.state.settings,
+        doc_repo=request.app.state.document_repo,
+        chunk_repo=request.app.state.chunk_repo,
+        edge_repo=request.app.state.edge_repo,
+        explanation_repo=request.app.state.explanation_repo,
+        llm=request.app.state.llm_client,
+        template=request.app.state.template_explainer,
+        bucket=request.app.state.llm_ratelimit,
     )
 
 

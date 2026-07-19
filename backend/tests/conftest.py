@@ -24,11 +24,17 @@ def _fake_ml_models(request, monkeypatch):
     if request.node.get_closest_marker("slow"):
         yield
         return
-    from tests.fixtures.fakes import FakeEmbedder, FakeEntityExtractor, FakeReranker
+    from tests.fixtures.fakes import (
+        FakeEmbedder,
+        FakeEntityExtractor,
+        FakeLLM,
+        FakeReranker,
+    )
 
     monkeypatch.setattr("app.main.DenseEmbedder", FakeEmbedder)
     monkeypatch.setattr("app.main.Reranker", FakeReranker)
     monkeypatch.setattr("app.main.EntityExtractor", FakeEntityExtractor)
+    monkeypatch.setattr("app.main.LocalLlamaClient", FakeLLM)
     yield
 
 
@@ -43,7 +49,9 @@ def settings(tmp_path, monkeypatch) -> Settings:
     # 1 MB cap: the oversized-upload test only has to ship ~1 MB through ASGI
     # instead of 25 MB. The cap logic is identical at any value.
     monkeypatch.setenv("DOCMESH_MAX_UPLOAD_MB", "1")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Belt-and-braces with the FakeLLM patch: even if a fake were missing, the
+    # fast tier could never hit the network for the ~1 GB GGUF.
+    monkeypatch.setenv("DOCMESH_LLM__AUTO_DOWNLOAD", "false")
     get_settings.cache_clear()
     yield get_settings()
     get_settings.cache_clear()

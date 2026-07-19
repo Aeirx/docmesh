@@ -26,7 +26,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
-    "slow: loads real ML models (bge/cross-encoder — first run downloads ~220 MB to the HF cache — plus the pip-installed en_core_web_sm spaCy model); run with `pytest -m slow`",
+    "slow: loads real ML models (bge/cross-encoder — first run downloads ~220 MB to the HF cache — plus the pip-installed en_core_web_sm spaCy model; the real-LLM test additionally downloads the ~1 GB Qwen2.5-1.5B GGUF to data/models/); run with `pytest -m slow`",
 ]
 # The slow tier is opt-in: default runs stay fast and offline.
 addopts = "-m 'not slow'"

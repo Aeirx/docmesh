@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocMesh — Graph Visual Mockup</title>
+<style>
+/* ============================================================
+   DocMesh — graph screen visual language mockup
+   Dark/technical direction. Tokens match the app @theme exactly.
+   Everything here is expressible in Tailwind v4 + plain CSS.
+   ============================================================ */
+
+:root{
+  color-scheme: dark;
+
+  /* ---- core system tokens (given) ---- */
+  --bg:      #0f1117;
+  --surface: #161922;
+  --border:  #262b38;
+  --accent:  #7c5cff;
+  --text:    #e6e8ee;
+  --muted:   #8b91a3;
+
+  /* ---- derived neutrals ---- */
+  --sunken:  #0c0e14;              /* below-surface wells (chunks, tracks) */
+  --raised:  #1c2030;              /* hover surfaces */
+  --border-strong: #323950;
+
+  /* ---- signal colors (edge = dominant signal) ---- */
+  --sig-sem: #a48fff;              /* semantic  — violet, accent family */
+  --sig-ent: #3dc9de;              /* entity    — cyan */
+  --sig-top: #e8a33d;              /* topic     — amber (doubles as warn) */
+
+  /* ---- 8-slot topic palette (node cluster tints) ---- */
+  --t1: #5ea2ff;  /* Finance   — blue    */
+  --t2: #4ac97e;  /* Markets   — green   */
+  --t3: #a5bd52;  /* Research  — lime    */
+  --t4: #f07a5e;  /* Customers — coral   */
+  --t5: #ea6188;  /* Growth    — rose    */
+  --t6: #d964c9;  /* Brand     — magenta */
+  --t7: #8ca0c6;  /* Ops       — steel   */
+  --t8: #c9a87a;  /* Legal     — sand    */
+
+  /* ---- radius family (8px base) ---- */
+  --r-sm: 6px;   /* chips, badges, marks */
+  --r-md: 8px;   /* buttons, inputs, chunk cells */
+  --r-lg: 10px;  /* nodes */
+  --r-xl: 12px;  /* panels, bars, frames */
+
+  /* ---- type ---- */
+  --font-ui:   "Inter", "Inter Variable", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+
+  /* ---- motion ---- */
+  --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:   cubic-bezier(0.7, 0, 0.84, 0);
+  --d-micro:   160ms;
+  --d-panel:   320ms;
+}
+
+*{ margin:0; padding:0; box-sizing:border-box; }
+html,body{ background:var(--bg); color:var(--text); font-family:var(--font-ui);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+button{ font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+svg{ display:block; }
+
+/* mono micro-label — the recurring signature detail */
+.klabel{ font:600 10px/1 var(--font-mono); letter-spacing:.12em; text-transform:uppercase;
+  color:var(--muted); }
+
+/* ============================================================
+   1 · CANVAS  (→ GraphCanvas)
+   ============================================================ */
+.app{ position:relative; height:100vh; min-height:740px; overflow:hidden;
+  background:var(--bg); }
+
+.canvas{ position:absolute; inset:0;
+  background-image: radial-gradient(circle, #1e2331 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -4px -4px; }
+.canvas::after{ /* whisper of violet ambience + edge vignette */
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:
+    radial-gradient(1100px 700px at 46% 40%, rgba(124,92,255,.045), transparent 62%),
+    radial-gradient(140% 110% at 50% 50%, transparent 55%, rgba(8,9,13,.55) 100%); }
+
+/* fixed design stage so absolute node coords behave like a settled d3-force layout */
+.stage{ position:absolute; left:50%; top:50%; width:1280px; height:760px;
+  transform:translate(-50%,-50%); }
+
+/* ============================================================
+   2 · EDGES  (→ ConnectionEdge)  — SVG layer behind nodes
+   ============================================================ */
+.edges{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; z-index:1; }
+
+.edge path{ fill:none; stroke-linecap:round; }
+.edge .e-base{ stroke:var(--ec); stroke-opacity:.5;
+  transition: stroke-opacity var(--d-micro) ease-out; pointer-events:stroke; }
+.edge:hover .e-base{ stroke-opacity:.9; }
+.edge .e-glow{ stroke:var(--ec); stroke-opacity:0; stroke-width:12;
+  transition: stroke-opacity 200ms ease-out; }
+.edge .e-flow{ stroke:var(--ec-bright); stroke-width:2; stroke-opacity:0;
+  stroke-dasharray:7 9; }
+
+.sig-sem{ --ec:var(--sig-sem); --ec-bright:#cfc3ff; }
+.sig-ent{ --ec:var(--sig-ent); --ec-bright:#9fe9f4; }
+.sig-top{ --ec:var(--sig-top); --ec-bright:#ffd28a; }
+
+/* hovered / selected edge: brighter + soft glow + animated dash flow */
+.edge.is-active .e-base{ stroke-opacity:.95; }
+.edge.is-active .e-glow{ stroke-opacity:.14; }
+.edge.is-active .e-flow{ stroke-opacity:.9;
+  animation: dash-flow .9s linear infinite; }
+@keyframes dash-flow{ to{ stroke-dashoffset:-16; } }
+
+/* ============================================================
+   3 · NODES  (→ DocNode)
+   ============================================================ */
+.node{ position:absolute; z-index:2; display:flex; align-items:center;
+  background: color-mix(in oklab, var(--tc) 5%, var(--surface));
+  border:1px solid color-mix(in oklab, var(--tc) 22%, var(--border));
+  border-radius:var(--r-lg); cursor:grab; user-select:none;
+  box-shadow: 0 1px 2px rgba(0,0,0,.35), 0 6px 16px rgba(0,0,0,.25);
+  transition: transform var(--d-micro) var(--ease-out),
+              box-shadow var(--d-micro) var(--ease-out),
+              border-color var(--d-micro) ease-out,
+              opacity 240ms ease-out; }
+
+.node:hover, .node.is-hover{
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--tc) 48%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--tc) 13%, transparent),
+    0 0 28px  color-mix(in oklab, var(--tc) 22%, transparent),
+    0 10px 28px rgba(0,0,0,.45);
+  z-index:3; }
+
+/* size tiers — scale with document size */
+.node.s { width:148px; height:44px; gap:8px;  padding:0 10px; --fs:11px;   --icon:22px; --meta:8.5px; }
+.node.m { width:176px; height:52px; gap:9px;  padding:0 12px; --fs:12px;   --icon:26px; --meta:9px;   }
+.node.l { width:204px; height:58px; gap:10px; padding:0 13px; --fs:12.5px; --icon:30px; --meta:9.5px; }
+.node.xl{ width:236px; height:66px; gap:11px; padding:0 15px; --fs:13.5px; --icon:34px; --meta:10px;  }
+
+/* topic slot classes */
+.t1{--tc:var(--t1)} .t2{--tc:var(--t2)} .t3{--tc:var(--t3)} .t4{--tc:var(--t4)}
+.t5{--tc:var(--t5)} .t6{--tc:var(--t6)} .t7{--tc:var(--t7)} .t8{--tc:var(--t8)}
+
+.n-icon{ flex:none; width:var(--icon); height:var(--icon); border-radius:7px;
+  display:grid; place-items:center;
+  background: color-mix(in oklab, var(--tc) 13%, transparent);
+  color: var(--tc); }
+.n-icon svg{ width:72%; height:72%; }
+
+.n-text{ min-width:0; flex:1; display:flex; flex-direction:column; gap:2px; }
+.n-name{ font-size:var(--fs); font-weight:600; letter-spacing:-.01em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.n-meta{ font:500 var(--meta)/1 var(--font-mono); letter-spacing:.05em;
+  text-transform:uppercase; color:var(--muted); }
+
+.n-badge{ flex:none; font:600 10px/1 var(--font-mono);
+  padding:4px 7px; border-radius:999px;
+  background: color-mix(in oklab, var(--tc) 14%, transparent);
+  color: color-mix(in oklab, var(--tc) 78%, #fff); }
+.node.s .n-badge{ font-size:9px; padding:3px 6px; }
+
+/* query-filter mode: irrelevant graph fades, relevant subgraph pulses once */
+.query-mode .node:not(.q-hit){ opacity:.15; }
+.query-mode .edge:not(.q-hit){ opacity:.08; }
+.query-mode .node.q-hit{ animation: pulse-once 600ms var(--ease-out) 1; }
+@keyframes pulse-once{
+  0%  { box-shadow: 0 0 0 0    color-mix(in oklab, var(--tc) 45%, transparent),
+                    0 6px 16px rgba(0,0,0,.25); }
+  100%{ box-shadow: 0 0 0 16px color-mix(in oklab, var(--tc) 0%,  transparent),
+                    0 6px 16px rgba(0,0,0,.25); }
+}
+.query-mode .edge-tip{ opacity:0; }
+
+/* ============================================================
+   EDGE TOOLTIP  (→ EdgeTooltip)
+   ============================================================ */
+.edge-tip{ position:absolute; z-index:4; width:184px; padding:10px 12px;
+  background: color-mix(in oklab, var(--surface) 94%, #fff 0%);
+  background: var(--surface);
+  border:1px solid var(--border-strong); border-radius:var(--r-lg);
+  box-shadow: 0 4px 12px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.35);
+  transition: opacity 200ms ease-out; }
+.edge-tip::before{ content:""; position:absolute; left:18px; top:-5px; width:8px; height:8px;
+  background:var(--surface); border-left:1px solid var(--border-strong);
+  border-top:1px solid var(--border-strong); transform:rotate(45deg); }
+.tip-head{ display:flex; align-items:baseline; gap:6px; margin-bottom:8px; }
+.tip-score{ font:650 15px/1 var(--font-mono); font-variant-numeric:tabular-nums; }
+.tip-cap{ font-size:10px; color:var(--muted); }
+.tip-row{ display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--muted);
+  padding:2.5px 0; }
+.tip-row i{ width:7px; height:7px; border-radius:50%; flex:none; }
+.tip-row b{ color:var(--text); font-weight:500; margin-left:auto;
+  font:500 10.5px/1 var(--font-mono); font-variant-numeric:tabular-nums; }
+
+/* ============================================================
+   6 · GRAPH META BAR  (→ GraphMetaBar)
+   ============================================================ */
+.metabar{ position:absolute; top:16px; left:16px; right:16px; height:52px; z-index:40;
+  display:flex; align-items:center; gap:14px; padding:0 16px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid var(--border); border-radius:var(--r-xl);
+  box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+
+.brand{ display:flex; align-items:center; gap:8px; font-weight:650; font-size:13.5px;
+  letter-spacing:-.01em; }
+.brand svg{ width:18px; height:18px; }
+
+.vdiv{ width:1px; height:20px; background:var(--border); flex:none; }
+
+.mb-stats{ font-size:12px; color:var(--muted); white-space:nowrap; }
+.mb-stats b{ color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+.mb-stats .sep{ display:inline-block; width:3px; height:3px; border-radius:50%;
+  background:var(--muted); opacity:.5; margin:0 8px; vertical-align:middle; }
+
+.mb-computed{ display:flex; align-items:center; gap:8px; font-size:12px;
+  color:var(--muted); white-space:nowrap; }
+
+.badge-stale{ display:inline-flex; align-items:center; gap:5px;
+  font:600 10px/1 var(--font-mono); letter-spacing:.06em; text-transform:uppercase;
+  color:var(--sig-top); padding:4px 8px; border-radius:999px;
+  background: color-mix(in oklab, var(--sig-top) 11%, transparent);
+  border:1px solid color-mix(in oklab, var(--sig-top) 28%, transparent); }
+.badge-stale i{ width:5px; height:5px; border-radius:50%; background:var(--sig-top); }
+
+.btn-ghost{ display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 11px;
+  font-size:12px; font-weight:500; color:var(--text);
+  border:1px solid var(--border); border-radius:var(--r-md); background:transparent;
+  transition: background var(--d-micro) ease-out, border-color var(--d-micro) ease-out,
+              transform var(--d-micro) var(--ease-out); white-space:nowrap; }
+.btn-ghost:hover{ background:var(--raised); border-color:var(--border-strong); }
+.btn-ghost:active{ transform:translateY(1px); }
+.btn-ghost svg{ width:13px; height:13px; color:var(--muted); }
+.btn-ghost:focus-visible, .search input:focus-visible, .p-close:focus-visible,
+.ctrl button:focus-visible, .demo-bar button:focus-visible{
+  outline:2px solid var(--accent); outline-offset:2px; }
+
+/* graph compute progress pill */
+.progress-pill{ display:flex; align-items:center; gap:9px; height:30px; padding:0 12px;
+  background:var(--sunken); border:1px solid var(--border); border-radius:999px;
+  white-space:nowrap; min-width:0; }
+.progress-pill .spin{ width:12px; height:12px; color:var(--accent); flex:none;
+  animation: spin 1s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+.progress-pill .p-label{ font-size:11.5px; color:var(--muted);
+  overflow:hidden; text-overflow:ellipsis; }
+.progress-pill .p-count{ font:600 10.5px/1 var(--font-mono); color:var(--text);
+  font-variant-numeric:tabular-nums; }
+.p-track{ width:56px; height:3px; border-radius:999px; background:var(--border);
+  overflow:hidden; flex:none; }
+.p-fill{ display:block; height:100%; border-radius:999px; background:var(--accent);
+  animation: fill-breathe 1.6s ease-in-out infinite; }
+@keyframes fill-breathe{ 0%,100%{ opacity:1 } 50%{ opacity:.6 } }
+
+.mb-spacer{ flex:1; }
+
+/* ghost search slot — reserved, becomes live query filtering later */
+.search{ display:flex; align-items:center; gap:8px; width:230px; height:32px; padding:0 10px;
+  border:1px solid var(--border); border-radius:var(--r-md); background:var(--sunken);
+  opacity:.55; transition: opacity 240ms ease-out, border-color 240ms ease-out,
+    box-shadow 240ms ease-out; }
+.search svg{ width:13px; height:13px; color:var(--muted); flex:none; }
+.search input{ flex:1; min-width:0; background:none; border:0; outline:0;
+  font:inherit; font-size:12px; color:var(--text); }
+.search input::placeholder{ color:var(--muted); }
+.search kbd{ font:500 10px/1 var(--font-mono); color:var(--muted);
+  border:1px solid var(--border); border-radius:4px; padding:3px 5px; background:var(--surface); }
+.query-mode .search{ opacity:1;
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 14%, transparent); }
+.search .match-count{ display:none; font:600 10px/1 var(--font-mono);
+  color:var(--accent); white-space:nowrap; }
+.query-mode .search .match-count{ display:block; }
+.query-mode .search kbd{ display:none; }
+
+/* ============================================================
+   4 · LEGEND  (→ GraphLegend)
+   ============================================================ */
+.legend{ position:absolute; left:16px; bottom:16px; z-index:30;
+  padding:12px 14px 13px; width:178px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid var(--border); border-radius:var(--r-xl); }
+.legend .klabel{ margin-bottom:9px; }
+.lg-row{ display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--text);
+  padding:3px 0; }
+.lg-row .swatch{ width:20px; height:0; border-top-style:solid; border-radius:999px; flex:none; }
+.lg-row span:last-child{ color:var(--muted); font-size:10px; margin-left:auto;
+  font-family:var(--font-mono); }
+.lg-div{ height:1px; background:var(--border); margin:10px -2px; }
+.lg-dots{ display:flex; gap:7px; }
+.lg-dots i{ width:9px; height:9px; border-radius:50%; }
+
+/* ============================================================
+   5 · MINIMAP + CONTROLS  (→ react-flow MiniMap/Controls overrides)
+   ============================================================ */
+.canvas-ui{ position:absolute; right:16px; bottom:16px; z-index:30;
+  display:flex; flex-direction:column; align-items:flex-end; gap:10px;
+  transition: right var(--d-panel) var(--ease-out); }
+.app.panel-open .canvas-ui{ right:428px; }
+
+.minimap{ padding:7px; background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid var(--border); border-radius:var(--r-xl); }
+.minimap svg{ border-radius:6px; background:var(--sunken); }
+
+.ctrl{ display:flex; flex-direction:column;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
+.ctrl button{ width:32px; height:32px; display:grid; place-items:center; color:var(--muted);
+  transition: background var(--d-micro) ease-out, color var(--d-micro) ease-out; }
+.ctrl button:hover{ background:var(--raised); color:var(--text); }
+.ctrl button + button{ border-top:1px solid var(--border); }
+.ctrl svg{ width:14px; height:14px; }
+
+/* ============================================================
+   7 + 8 · SIDE PANELS  (→ panels/EdgePanel, panels/NodePanel)
+   ============================================================ */
+.panel{ position:absolute; top:84px; right:16px; bottom:16px; width:396px; z-index:50;
+  display:flex; flex-direction:column;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r-xl);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.2), 0 24px 64px rgba(0,0,0,.45);
+  opacity:0; transform:translateX(16px); pointer-events:none;
+  transition: opacity 280ms ease-out, transform var(--d-panel) var(--ease-out); }
+.panel.open{ opacity:1; transform:none; pointer-events:auto; }
+
+.p-head{ display:flex; align-items:flex-start; gap:12px; padding:18px 18px 14px;
+  border-bottom:1px solid var(--border); }
+.p-head .klabel{ margin-bottom:6px; color:var(--accent);
+  color: color-mix(in oklab, var(--accent) 75%, var(--muted)); }
+.p-head h2{ font-size:15px; font-weight:650; letter-spacing:-.015em; line-height:1.25; }
+.p-docs{ display:flex; align-items:center; gap:6px; margin-top:9px; min-width:0; }
+.pd{ display:inline-flex; align-items:center; gap:6px; min-width:0;
+  font-size:11px; font-weight:500; color:var(--text);
+  padding:4px 9px; border-radius:999px;
+  background: color-mix(in oklab, var(--tc) 9%, transparent);
+  border:1px solid color-mix(in oklab, var(--tc) 24%, transparent); }
+.pd i{ width:6px; height:6px; border-radius:50%; background:var(--tc); flex:none; }
+.pd span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.p-docs > svg{ width:11px; height:11px; color:var(--muted); flex:none; }
+.p-close{ margin-left:auto; flex:none; width:28px; height:28px; display:grid; place-items:center;
+  color:var(--muted); border-radius:var(--r-md);
+  transition: background var(--d-micro) ease-out, color var(--d-micro) ease-out; }
+.p-close:hover{ background:var(--raised); color:var(--text); }
+.p-close svg{ width:13px; height:13px; }
+
+.p-body{ flex:1; overflow-y:auto; overflow-x:hidden; padding:18px; scrollbar-width:thin;
+  scrollbar-color: var(--border-strong) transparent; }
+.p-sec + .p-sec{ margin-top:22px; }
+.p-sec > .klabel{ display:block; margin-bottom:10px; }
+
+/* (a) explanation card  (→ ExplanationCard) */
+.exp-card{ position:relative; padding:13px 14px;
+  background: color-mix(in oklab, var(--accent) 4%, var(--sunken));
+  border:1px solid color-mix(in oklab, var(--accent) 16%, var(--border));
+  border-radius:var(--r-lg); }
+.exp-card p{ font-size:12.5px; line-height:1.65; color:var(--text); }
+.exp-badge{ display:inline-flex; align-items:center; gap:5px; margin-bottom:9px;
+  font:600 9.5px/1 var(--font-mono); letter-spacing:.08em; text-transform:uppercase;
+  padding:4px 8px; border-radius:999px; }
+.exp-badge svg{ width:9px; height:9px; }
+.exp-badge.llm{ color:var(--sig-sem);
+  background: color-mix(in oklab, var(--accent) 13%, transparent);
+  border:1px solid color-mix(in oklab, var(--accent) 30%, transparent); }
+.exp-badge.tpl{ color:var(--muted);
+  background: color-mix(in oklab, var(--muted) 10%, transparent);
+  border:1px solid color-mix(in oklab, var(--muted) 26%, transparent); }
+
+/* explanation skeleton variant */
+.exp-card.loading p{ display:none; }
+.sk-line{ height:9px; border-radius:5px; background:var(--raised);
+  position:relative; overflow:hidden; margin-top:8px; }
+.sk-line::after, .sk-block::after{ content:""; position:absolute; inset:0;
+  background:linear-gradient(100deg, transparent 32%, rgba(230,232,238,.055) 50%, transparent 68%);
+  background-size:220% 100%;
+  animation: shimmer 1.8s ease-in-out infinite; }
+@keyframes shimmer{ from{ background-position:130% 0 } to{ background-position:-90% 0 } }
+.sk-line.w60{ width:60%; }
+
+/* (b) contribution breakdown */
+.score-row{ display:flex; align-items:baseline; gap:8px; margin-bottom:10px; }
+.score-big{ font:650 22px/1 var(--font-mono); font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em; }
+.score-cap{ font-size:11px; color:var(--muted); }
+.stack-bar{ display:flex; gap:2px; height:8px; border-radius:999px; overflow:hidden;
+  margin-bottom:10px; }
+.stack-bar i{ height:100%; }
+.stack-bar .sem{ background:var(--sig-sem); border-radius:999px 0 0 999px; }
+.stack-bar .ent{ background:var(--sig-ent); }
+.stack-bar .top{ background:var(--sig-top); border-radius:0 999px 999px 0; }
+.brk-row{ display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--muted);
+  padding:3px 0; }
+.brk-row i{ width:7px; height:7px; border-radius:50%; flex:none; }
+.brk-row b{ color:var(--text); font-weight:500; }
+.brk-row .val{ margin-left:auto; font:500 11px/1 var(--font-mono); color:var(--text);
+  font-variant-numeric:tabular-nums; }
+.brk-row .pct{ font:500 10px/1 var(--font-mono); color:var(--muted); width:32px;
+  text-align:right; font-variant-numeric:tabular-nums; }
+
+/* (c) shared entity chips  (→ EntityChips) */
+.chips{ display:flex; flex-wrap:wrap; gap:7px; }
+.chip{ display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:500;
+  padding:5px 10px; border-radius:999px; color:var(--text);
+  background: color-mix(in oklab, var(--sig-ent) 7%, var(--surface));
+  border:1px solid color-mix(in oklab, var(--sig-ent) 22%, var(--border));
+  transition: border-color var(--d-micro) ease-out, transform var(--d-micro) var(--ease-out); }
+.chip:hover{ border-color: color-mix(in oklab, var(--sig-ent) 45%, var(--border));
+  transform:translateY(-1px); }
+.chip i{ width:6px; height:6px; border-radius:50%; background:var(--sig-ent); flex:none; }
+.chip small{ font:500 9.5px/1 var(--font-mono); color:var(--muted); }
+.chip.rare{ border-color: color-mix(in oklab, var(--sig-ent) 45%, var(--border));
+  background: color-mix(in oklab, var(--sig-ent) 13%, var(--surface)); }
+.chip.rare small{ color:var(--sig-ent); }
+.chip.w1 i{opacity:1} .chip.w2 i{opacity:.65} .chip.w3 i{opacity:.35}
+
+/* topic chips (node panel) */
+.chip.topic{ background: color-mix(in oklab, var(--tc) 9%, var(--surface));
+  border-color: color-mix(in oklab, var(--tc) 26%, var(--border)); }
+.chip.topic i{ background:var(--tc); opacity:1; }
+.chip.topic:hover{ border-color: color-mix(in oklab, var(--tc) 48%, var(--border)); }
+
+/* (d) evidence chunk pairs  (→ EvidencePairs) */
+.pair + .pair{ margin-top:14px; }
+.pair-head{ display:flex; align-items:center; gap:8px; margin-bottom:7px; }
+.pair-head .klabel{ letter-spacing:.09em; }
+.pair-head .sim{ margin-left:auto; font:500 10px/1 var(--font-mono); color:var(--muted);
+  font-variant-numeric:tabular-nums; }
+.pair-grid{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+.chunk{ min-width:0; background:var(--sunken); border:1px solid var(--border); border-radius:var(--r-md);
+  padding:9px 10px; }
+.chunk-cap{ display:flex; align-items:center; gap:5px; margin-bottom:6px;
+  font:500 9px/1.4 var(--font-mono); letter-spacing:.03em; color:var(--muted);
+  overflow:hidden; }
+.chunk-cap i{ width:5px; height:5px; border-radius:50%; background:var(--tc); flex:none; }
+.chunk-cap span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chunk p{ font-size:11px; line-height:1.6; color:color-mix(in oklab, var(--text) 82%, var(--muted)); }
+.chunk mark{ background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color:#d4cbff; border-radius:3px; padding:0 3px; }
+
+/* node panel bits */
+.np-summary{ font-size:12.5px; line-height:1.65; color:var(--text); }
+.np-meta{ display:flex; align-items:center; gap:8px; margin-top:9px;
+  font:500 10px/1 var(--font-mono); letter-spacing:.05em; text-transform:uppercase;
+  color:var(--muted); }
+.conn{ display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:var(--r-md);
+  text-decoration:none; color:inherit; cursor:pointer;
+  transition: background var(--d-micro) ease-out; }
+.conn:hover{ background:var(--raised); }
+.conn .dot{ width:7px; height:7px; border-radius:50%; background:var(--tc); flex:none; }
+.conn .c-name{ font-size:12px; font-weight:500; min-width:0; flex:1;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conn .c-bar{ width:48px; height:4px; border-radius:999px; background:var(--border);
+  overflow:hidden; flex:none; }
+.conn .c-bar i{ display:block; height:100%; border-radius:999px; background:var(--sc); }
+.conn .c-score{ font:500 11px/1 var(--font-mono); color:var(--muted); width:30px;
+  text-align:right; font-variant-numeric:tabular-nums; flex:none; }
+
+/* ============================================================
+   DEMO STATE SWITCHER (mockup affordance only — not product UI)
+   ============================================================ */
+.demo-bar{ position:absolute; bottom:16px; left:50%; transform:translateX(-50%); z-index:60;
+  display:flex; align-items:center; gap:4px; padding:4px 6px 4px 12px;
+  background: color-mix(in srgb, var(--sunken) 90%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border:1px solid var(--border); border-radius:999px; }
+.demo-bar .klabel{ font-size:8.5px; margin-right:6px; opacity:.8; }
+.demo-bar button{ font-size:11px; font-weight:500; color:var(--muted);
+  padding:5px 10px; border-radius:999px;
+  transition: color var(--d-micro) ease-out, background var(--d-micro) ease-out; }
+.demo-bar button:hover{ color:var(--text); }
+.demo-bar button.on{ color:var(--text);
+  background: color-mix(in oklab, var(--accent) 20%, transparent); }
+
+/* ============================================================
+   9 · STATES REVIEW SECTION  (skeleton / empty / variants)
+   ============================================================ */
+.states{ border-top:1px solid var(--border); background:var(--bg);
+  padding:72px 48px 96px; }
+.states-inner{ max-width:1360px; margin:0 auto; }
+.states h2{ font-size:20px; font-weight:650; letter-spacing:-.02em; margin:10px 0 6px; }
+.states .lede{ font-size:13px; color:var(--muted); max-width:62ch; margin-bottom:36px; }
+.frames{ display:grid; grid-template-columns:repeat(auto-fit, minmax(620px, 1fr)); gap:24px; }
+.mini-stage{ position:absolute; left:50%; top:50%; width:640px; height:320px;
+  transform:translate(-50%,-50%); }
+.mini-stage > svg{ position:absolute; inset:0; }
+.frame-body.plain > *{ max-width:460px; }
+.frame{ display:flex; flex-direction:column; border:1px solid var(--border);
+  border-radius:var(--r-xl); overflow:hidden; background:var(--surface); }
+.frame figcaption{ display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px; border-bottom:1px solid var(--border); }
+.frame figcaption .note{ font-size:10px; color:var(--muted); }
+.frame-body{ position:relative; flex:1; min-height:320px; background:var(--bg);
+  background-image: radial-gradient(circle, #1e2331 1px, transparent 1px);
+  background-size:24px 24px; overflow:hidden; }
+.frame-body.plain{ background-image:none; padding:20px; height:auto; }
+
+/* skeleton graph state */
+.sk-node{ position:absolute; display:flex; align-items:center; gap:9px; padding:0 12px;
+  height:50px; width:170px; background:var(--surface);
+  border:1px solid var(--border); border-radius:var(--r-lg); }
+.sk-block{ position:relative; overflow:hidden; background:var(--raised); border-radius:6px; }
+.sk-node .sk-ic{ width:24px; height:24px; flex:none; }
+.sk-node .sk-tx{ flex:1; display:flex; flex-direction:column; gap:6px; }
+.sk-node .sk-a{ height:8px; width:80%; }
+.sk-node .sk-b{ height:6px; width:45%; }
+.sk-edges path{ fill:none; stroke:var(--border); stroke-width:1.5; stroke-dasharray:4 6;
+  stroke-linecap:round; }
+
+/* empty state */
+.empty{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; text-align:center; gap:4px; padding:24px; }
+.empty .glyph{ width:52px; height:52px; border-radius:14px; display:grid; place-items:center;
+  background: color-mix(in oklab, var(--accent) 7%, var(--surface));
+  border:1px solid color-mix(in oklab, var(--accent) 18%, var(--border));
+  color:var(--accent); margin-bottom:12px; }
+.empty .glyph svg{ width:24px; height:24px; }
+.empty h3{ font-size:14.5px; font-weight:600; letter-spacing:-.01em; }
+.empty p{ font-size:12px; color:var(--muted); max-width:34ch; line-height:1.6; }
+.empty .btn-ghost{ margin-top:14px;
+  border-color: color-mix(in oklab, var(--accent) 32%, var(--border));
+  background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.empty .btn-ghost:hover{ background: color-mix(in oklab, var(--accent) 18%, transparent); }
+
+/* query-mode mini demo: looping pulse for review (real app pulses ONCE) */
+.demo-pulse{ animation: pulse-once 1.4s var(--ease-out) infinite !important;
+  animation-delay:.4s !important; }
+
+/* ============================================================
+   REDUCED MOTION
+   ============================================================ */
+@media (prefers-reduced-motion: reduce){
+  .edge.is-active .e-flow{ animation:none; }
+  .sk-line::after, .sk-block::after{ animation:none; }
+  .progress-pill .spin{ animation:none; }
+  .p-fill{ animation:none; }
+  .query-mode .node.q-hit, .demo-pulse{ animation:none !important; }
+  .panel, .canvas-ui, .node, .btn-ghost, .chip{ transition-duration:.01ms; }
+}
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════ MAIN SCREEN ════════════════════════ -->
+<div class="app panel-open" id="app">
+  <div class="canvas"></div>
+
+  <div class="stage">
+
+    <!-- EDGE LAYER (→ ConnectionEdge). strokeWidth = 1 + combined_score × 4 -->
+    <svg class="edges" viewBox="0 0 1280 760" aria-hidden="true">
+      <!-- E2 · N1–N3 · topic .34 -->
+      <g class="edge sig-top"><path class="e-base" stroke-width="1.5" d="M430 300 C480 360, 540 410, 610 430"/></g>
+      <!-- E3 · N1–N4 · semantic .61 -->
+      <g class="edge sig-sem q-hit"><path class="e-base" stroke-width="2.5" d="M430 300 C600 230, 750 260, 900 330"/></g>
+      <!-- E4 · N2–N4 · entity .67 -->
+      <g class="edge sig-ent q-hit"><path class="e-base" stroke-width="3" d="M660 210 C740 230, 820 270, 900 330"/></g>
+      <!-- E5 · N4–N5 · topic .71 -->
+      <g class="edge sig-top"><path class="e-base" stroke-width="3.5" d="M900 330 C925 380, 915 425, 880 470"/></g>
+      <!-- E6 · N4–N6 · entity .44 -->
+      <g class="edge sig-ent"><path class="e-base" stroke-width="2" d="M900 330 C880 410, 850 490, 800 560"/></g>
+      <!-- E7 · N5–N6 · semantic .31 -->
+      <g class="edge sig-sem"><path class="e-base" stroke-width="1.5" d="M880 470 C855 508, 835 538, 800 560"/></g>
+      <!-- E8 · N3–N6 · entity .29 -->
+      <g class="edge sig-ent"><path class="e-base" stroke-width="1.5" d="M610 430 C670 480, 730 520, 800 560"/></g>
+      <!-- E1 · N1–N2 · semantic .82 · HOVERED: glow + dash-flow -->
+      <g class="edge sig-sem is-active q-hit">
+        <path class="e-glow" d="M430 300 C500 250, 570 220, 660 210"/>
+        <path class="e-base" stroke-width="4.5" d="M430 300 C500 250, 570 220, 660 210"/>
+        <path class="e-flow" d="M430 300 C500 250, 570 220, 660 210"/>
+      </g>
+    </svg>
+
+    <!-- NODES (→ DocNode). Sized by doc size, colored by dominant topic. -->
+
+    <!-- N1 · XL · Finance · HOVERED -->
+    <div class="node xl t1 is-hover q-hit" style="left:312px; top:267px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".4">PDF</text></svg></span>
+      <span class="n-text"><span class="n-name">Q3-Financials.pdf</span><span class="n-meta">PDF · 1.8 MB</span></span>
+      <span class="n-badge">42</span>
+    </div>
+
+    <!-- N2 · L · Finance -->
+    <div class="node l t1 q-hit" style="left:558px; top:181px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".2">DOC</text></svg></span>
+      <span class="n-text"><span class="n-name">market-analysis.docx</span><span class="n-meta">DOCX · 640 KB</span></span>
+      <span class="n-badge">28</span>
+    </div>
+
+    <!-- N3 · S · Ops -->
+    <div class="node s t7" style="left:536px; top:408px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6.5" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".4">MD</text></svg></span>
+      <span class="n-text"><span class="n-name">notes-meeting.md</span><span class="n-meta">MD · 12 KB</span></span>
+      <span class="n-badge">4</span>
+    </div>
+
+    <!-- N4 · L · Markets · long name truncates -->
+    <div class="node l t2 q-hit" style="left:798px; top:301px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".4">PDF</text></svg></span>
+      <span class="n-text"><span class="n-name">competitor-research-2026-h1-deep-dive.pdf</span><span class="n-meta">PDF · 890 KB</span></span>
+      <span class="n-badge">31</span>
+    </div>
+
+    <!-- N5 · M · Markets -->
+    <div class="node m t2" style="left:792px; top:444px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6.5" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".4">MD</text></svg></span>
+      <span class="n-text"><span class="n-name">product-roadmap.md</span><span class="n-meta">MD · 96 KB</span></span>
+      <span class="n-badge">12</span>
+    </div>
+
+    <!-- N6 · M · Customers -->
+    <div class="node m t4" style="left:712px; top:534px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".4">TXT</text></svg></span>
+      <span class="n-text"><span class="n-name">user-interviews.txt</span><span class="n-meta">TXT · 210 KB</span></span>
+      <span class="n-badge">18</span>
+    </div>
+
+    <!-- N7 · S · Brand · isolated / no connections -->
+    <div class="node s t6" style="left:96px; top:598px;">
+      <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><text x="12" y="17.5" text-anchor="middle" font-size="6" font-weight="700" fill="currentColor" stroke="none" font-family="Inter,system-ui,sans-serif" letter-spacing=".4">PDF</text></svg></span>
+      <span class="n-text"><span class="n-name">old-brand-guide.pdf</span><span class="n-meta">PDF · 44 KB</span></span>
+      <span class="n-badge">6</span>
+    </div>
+
+    <!-- EDGE TOOLTIP (→ EdgeTooltip) — anchored near hovered edge E1 -->
+    <div class="edge-tip" style="left:560px; top:262px;">
+      <div class="tip-head"><span class="tip-score">0.82</span><span class="tip-cap">combined score</span></div>
+      <div class="tip-row"><i style="background:var(--sig-sem)"></i>semantic<b>0.44</b></div>
+      <div class="tip-row"><i style="background:var(--sig-ent)"></i>entity<b>0.25</b></div>
+      <div class="tip-row"><i style="background:var(--sig-top)"></i>topic<b>0.13</b></div>
+    </div>
+  </div>
+
+  <!-- ═══ GRAPH META BAR (→ GraphMetaBar) ═══ -->
+  <header class="metabar">
+    <div class="brand">
+      <svg viewBox="0 0 18 18" fill="none"><path d="M4 12.5 9 4.5l5 8" stroke="#7c5cff" stroke-opacity=".45" stroke-width="1.3"/><path d="M4 12.5h10" stroke="#7c5cff" stroke-opacity=".45" stroke-width="1.3"/><circle cx="9" cy="4.5" r="2" fill="#7c5cff"/><circle cx="4" cy="12.5" r="2" fill="#7c5cff"/><circle cx="14" cy="12.5" r="2" fill="#7c5cff"/></svg>
+      DocMesh
+    </div>
+    <span class="vdiv"></span>
+    <div class="mb-stats"><b>7</b> documents<span class="sep"></span><b>8</b> connections</div>
+    <span class="vdiv"></span>
+    <div class="mb-computed">
+      computed 2m ago
+      <span class="badge-stale"><i></i>Stale</span>
+    </div>
+    <button class="btn-ghost">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.97"/><path d="M13.5 2.6v3.1h-3.1"/></svg>
+      Recompute
+    </button>
+    <div class="progress-pill">
+      <svg class="spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 1.5A6.5 6.5 0 1 1 1.5 8"/></svg>
+      <span class="p-label">Extracting entities…</span>
+      <span class="p-count">4/6 docs</span>
+      <span class="p-track"><span class="p-fill" style="width:66%"></span></span>
+    </div>
+    <div class="mb-spacer"></div>
+    <label class="search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="m13.8 13.8-3.3-3.3"/></svg>
+      <input type="text" placeholder="Filter by query…" disabled id="searchInput">
+      <span class="match-count">3 matches</span>
+      <kbd>/</kbd>
+    </label>
+  </header>
+
+  <!-- ═══ LEGEND (→ GraphLegend) ═══ -->
+  <aside class="legend">
+    <div class="klabel">Connection signals</div>
+    <div class="lg-row"><span class="swatch" style="border-color:var(--sig-sem); border-top-width:3px"></span>Semantic<span>cosine</span></div>
+    <div class="lg-row"><span class="swatch" style="border-color:var(--sig-ent); border-top-width:2px"></span>Entity<span>shared</span></div>
+    <div class="lg-row"><span class="swatch" style="border-color:var(--sig-top); border-top-width:2px"></span>Topic<span>cluster</span></div>
+    <div class="lg-div"></div>
+    <div class="klabel">Topics</div>
+    <div class="lg-dots">
+      <i style="background:var(--t1)" title="Finance"></i><i style="background:var(--t2)" title="Markets"></i>
+      <i style="background:var(--t3)" title="Research"></i><i style="background:var(--t4)" title="Customers"></i>
+      <i style="background:var(--t5)" title="Growth"></i><i style="background:var(--t6)" title="Brand"></i>
+      <i style="background:var(--t7)" title="Ops"></i><i style="background:var(--t8)" title="Legal"></i>
+    </div>
+  </aside>
+
+  <!-- ═══ MINIMAP + CONTROLS (→ MiniMap / Controls overrides) ═══ -->
+  <div class="canvas-ui">
+    <aside class="minimap">
+      <svg width="166" height="99" viewBox="0 0 166 99">
+        <rect x="40"  y="34" width="31" height="9" rx="2.5" fill="var(--t1)" opacity=".75"/>
+        <rect x="72"  y="23" width="27" height="8" rx="2.5" fill="var(--t1)" opacity=".65"/>
+        <rect x="69"  y="53" width="19" height="6" rx="2"   fill="var(--t7)" opacity=".6"/>
+        <rect x="103" y="39" width="27" height="8" rx="2.5" fill="var(--t2)" opacity=".65"/>
+        <rect x="103" y="57" width="23" height="7" rx="2"   fill="var(--t2)" opacity=".6"/>
+        <rect x="92"  y="69" width="23" height="7" rx="2"   fill="var(--t4)" opacity=".6"/>
+        <rect x="12"  y="78" width="19" height="6" rx="2"   fill="var(--t6)" opacity=".55"/>
+        <rect x="26" y="12" width="118" height="74" rx="4" fill="rgba(230,232,238,.03)" stroke="rgba(230,232,238,.22)" stroke-width="1"/>
+      </svg>
+    </aside>
+    <div class="ctrl">
+      <button title="Zoom in"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+      <button title="Zoom out"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button>
+      <button title="Fit to view"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H3a1 1 0 0 0-1 1v3M10 2h3a1 1 0 0 1 1 1v3M6 14H3a1 1 0 0 1-1-1v-3M10 14h3a1 1 0 0 0 1-1v-3"/></svg></button>
+    </div>
+  </div>
+
+  <!-- ═══ EDGE PANEL (→ panels/EdgePanel) ═══ -->
+  <aside class="panel edge-panel open" id="edgePanel">
+    <header class="p-head">
+      <div style="min-width:0">
+        <div class="klabel">Connection</div>
+        <h2>How are these linked?</h2>
+        <div class="p-docs">
+          <span class="pd t1"><i></i><span>Q3-Financials.pdf</span></span>
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M1.5 6h9M8 3.5 10.5 6 8 8.5M4 3.5 1.5 6 4 8.5"/></svg>
+          <span class="pd t1"><i></i><span>market-analysis.docx</span></span>
+        </div>
+      </div>
+      <button class="p-close" data-close title="Close">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m2.5 2.5 9 9M11.5 2.5l-9 9"/></svg>
+      </button>
+    </header>
+    <div class="p-body">
+
+      <!-- (a) explanation (→ ExplanationCard) -->
+      <section class="p-sec">
+        <span class="klabel">Why they're connected</span>
+        <div class="exp-card">
+          <span class="exp-badge llm"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 9.6 6 14 7.5 9.6 9 8 13.5 6.4 9 2 7.5 6.4 6z"/></svg>Local LLM</span>
+          <p>These documents are linked primarily by meaning. Both analyze Q3 revenue contraction in the EMEA mid-market — the financial report quantifies a 12% ARR decline, while the market analysis attributes that decline to Acme Corp's discount-led pricing pressure. They also share 6 entities, including Acme&nbsp;Corp, ARR, and churn rate.</p>
+        </div>
+      </section>
+
+      <!-- (b) contribution breakdown -->
+      <section class="p-sec">
+        <span class="klabel">Connection strength</span>
+        <div class="score-row"><span class="score-big">0.82</span><span class="score-cap">combined score</span></div>
+        <div class="stack-bar">
+          <i class="sem" style="width:54%"></i><i class="ent" style="width:30%"></i><i class="top" style="width:16%"></i>
+        </div>
+        <div class="brk-row"><i style="background:var(--sig-sem)"></i><b>Semantic</b> similarity<span class="val">0.44</span><span class="pct">54%</span></div>
+        <div class="brk-row"><i style="background:var(--sig-ent)"></i><b>Entity</b> overlap<span class="val">0.25</span><span class="pct">30%</span></div>
+        <div class="brk-row"><i style="background:var(--sig-top)"></i><b>Topic</b> affinity<span class="val">0.13</span><span class="pct">16%</span></div>
+      </section>
+
+      <!-- (c) shared entities (→ EntityChips): dot opacity = weight, ×n = doc frequency -->
+      <section class="p-sec">
+        <span class="klabel">Shared entities · 6</span>
+        <div class="chips">
+          <span class="chip w1">Acme Corp<i></i><small>×5</small></span>
+          <span class="chip w1">ARR<i></i><small>×4</small></span>
+          <span class="chip w2">EMEA<i></i><small>×3</small></span>
+          <span class="chip w2">churn rate<i></i><small>×3</small></span>
+          <span class="chip w3">mid-market<i></i><small>×2</small></span>
+          <span class="chip w1 rare" title="Appears only in these two documents">Sarah Chen<i></i><small>rare</small></span>
+        </div>
+      </section>
+
+      <!-- (d) evidence (→ EvidencePairs) -->
+      <section class="p-sec">
+        <span class="klabel">Evidence · top chunk pairs</span>
+        <div class="pair">
+          <div class="pair-head"><span class="klabel">Pair 1</span><span class="sim">cos 0.91</span></div>
+          <div class="pair-grid">
+            <div class="chunk t1">
+              <div class="chunk-cap"><i></i><span>Q3-Financials.pdf · p.4 · §Revenue</span></div>
+              <p>EMEA <mark>ARR declined 12%</mark> quarter-over-quarter, driven primarily by <mark>churn</mark> in the <mark>mid-market</mark> segment, partially offset by enterprise expansion.</p>
+            </div>
+            <div class="chunk t1">
+              <div class="chunk-cap"><i></i><span>market-analysis.docx · §3.2 Pricing</span></div>
+              <p>Aggressive discounting by <mark>Acme Corp</mark> correlates with the observed <mark>mid-market churn</mark> and the region's <mark>ARR</mark> contraction this quarter.</p>
+            </div>
+          </div>
+        </div>
+        <div class="pair">
+          <div class="pair-head"><span class="klabel">Pair 2</span><span class="sim">cos 0.84</span></div>
+          <div class="pair-grid">
+            <div class="chunk t1">
+              <div class="chunk-cap"><i></i><span>Q3-Financials.pdf · p.11 · §Outlook</span></div>
+              <p>Management expects <mark>pricing pressure</mark> to persist through Q4, with <mark>EMEA</mark> recovery contingent on packaging changes.</p>
+            </div>
+            <div class="chunk t1">
+              <div class="chunk-cap"><i></i><span>market-analysis.docx · §5 Recommendations</span></div>
+              <p>Counter <mark>Acme's</mark> undercutting with usage-based packaging in <mark>EMEA</mark> ahead of Q4 renewal season.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ═══ NODE PANEL (→ panels/NodePanel) — alternate state, toggle below ═══ -->
+  <aside class="panel node-panel" id="nodePanel">
+    <header class="p-head">
+      <div style="min-width:0">
+        <div class="klabel">Document</div>
+        <h2>Q3-Financials.pdf</h2>
+        <div class="np-meta"><span>PDF</span>·<span>1.8 MB</span>·<span>42 chunks</span>·<span style="color:var(--t1)">● Finance</span></div>
+      </div>
+      <button class="p-close" data-close title="Close">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m2.5 2.5 9 9M11.5 2.5l-9 9"/></svg>
+      </button>
+    </header>
+    <div class="p-body">
+      <section class="p-sec">
+        <span class="klabel">Summary</span>
+        <p class="np-summary">Quarterly financial results: revenue by region, ARR movement, churn analysis, and management outlook for Q4.</p>
+      </section>
+      <section class="p-sec">
+        <span class="klabel">Top entities</span>
+        <div class="chips">
+          <span class="chip w1">ARR<i></i><small>×12</small></span>
+          <span class="chip w1">EMEA<i></i><small>×9</small></span>
+          <span class="chip w2">Acme Corp<i></i><small>×5</small></span>
+          <span class="chip w2">churn rate<i></i><small>×4</small></span>
+          <span class="chip w3 rare">Sarah Chen<i></i><small>rare</small></span>
+        </div>
+      </section>
+      <section class="p-sec">
+        <span class="klabel">Top topics</span>
+        <div class="chips">
+          <span class="chip topic t1"><i></i>Finance<small>62%</small></span>
+          <span class="chip topic t2"><i></i>Markets<small>21%</small></span>
+          <span class="chip topic t4"><i></i>Customers<small>11%</small></span>
+        </div>
+      </section>
+      <section class="p-sec">
+        <span class="klabel">Strongest connections</span>
+        <a class="conn t1" style="--sc:var(--sig-sem)"><i class="dot"></i><span class="c-name">market-analysis.docx</span><span class="c-bar"><i style="width:82%"></i></span><span class="c-score">0.82</span></a>
+        <a class="conn t2" style="--sc:var(--sig-sem)"><i class="dot"></i><span class="c-name">competitor-research-2026-h1-deep-dive.pdf</span><span class="c-bar"><i style="width:61%"></i></span><span class="c-score">0.61</span></a>
+        <a class="conn t7" style="--sc:var(--sig-top)"><i class="dot"></i><span class="c-name">notes-meeting.md</span><span class="c-bar"><i style="width:34%"></i></span><span class="c-score">0.34</span></a>
+      </section>
+    </div>
+  </aside>
+
+  <!-- demo-only state switcher -->
+  <nav class="demo-bar" aria-label="Mockup state switcher">
+    <span class="klabel">States</span>
+    <button data-state="edge" class="on">Edge panel</button>
+    <button data-state="node">Node panel</button>
+    <button data-state="query">Query filter</button>
+    <button data-state="clean">Clean</button>
+  </nav>
+</div>
+
+<!-- ════════════════════════ STATES REVIEW SHEET ════════════════════════ -->
+<section class="states">
+  <div class="states-inner">
+    <span class="klabel">Review sheet</span>
+    <h2>Loading, empty &amp; variant states</h2>
+    <p class="lede">Every state ships designed, not defaulted. The query-filter frame loops its
+      pulse for review — in the app it fires once (600ms) when results land. Use the switcher on
+      the main screen above to preview the edge panel, node panel and query mode in context.</p>
+
+    <div class="frames">
+
+      <!-- SKELETON -->
+      <figure class="frame">
+        <figcaption><span class="klabel">Skeleton — computing graph</span><span class="note">shimmer 1.8s ease-in-out</span></figcaption>
+        <div class="frame-body">
+          <div class="mini-stage">
+          <svg class="sk-edges" width="640" height="320" viewBox="0 0 640 320">
+            <path d="M170 110 C240 80, 300 75, 370 90"/>
+            <path d="M170 110 C230 160, 300 195, 380 215"/>
+            <path d="M370 90 C400 130, 400 170, 380 215"/>
+            <path d="M380 215 C450 230, 500 220, 540 180"/>
+          </svg>
+          <div class="sk-node" style="left:85px;  top:85px;"><span class="sk-block sk-ic"></span><span class="sk-tx"><span class="sk-block sk-a"></span><span class="sk-block sk-b"></span></span></div>
+          <div class="sk-node" style="left:285px; top:65px;  width:150px;"><span class="sk-block sk-ic"></span><span class="sk-tx"><span class="sk-block sk-a"></span><span class="sk-block sk-b"></span></span></div>
+          <div class="sk-node" style="left:295px; top:190px; width:186px;"><span class="sk-block sk-ic"></span><span class="sk-tx"><span class="sk-block sk-a"></span><span class="sk-block sk-b"></span></span></div>
+          <div class="sk-node" style="left:475px; top:150px; width:140px;"><span class="sk-block sk-ic"></span><span class="sk-tx"><span class="sk-block sk-a"></span><span class="sk-block sk-b"></span></span></div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- EMPTY -->
+      <figure class="frame">
+        <figcaption><span class="klabel">Empty — fewer than 2 documents</span><span class="note">accent used once</span></figcaption>
+        <div class="frame-body">
+          <div class="empty">
+            <div class="glyph">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="17" r="2.4"/><circle cx="12" cy="6" r="2.4"/><circle cx="18" cy="17" r="2.4"/><path d="M10.9 8.1 7.2 14.9M13.1 8.1l3.7 6.8M8.4 17h7.2" stroke-opacity=".45"/></svg>
+            </div>
+            <h3>No connections yet</h3>
+            <p>Upload at least 2 documents to see how they link together.</p>
+            <button class="btn-ghost">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 10.5v-7M5 6l3-3 3 3M2.5 12.5v1a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1"/></svg>
+              Upload documents
+            </button>
+          </div>
+        </div>
+      </figure>
+
+      <!-- QUERY-FILTER MODE (static composition + looping pulse preview) -->
+      <figure class="frame">
+        <figcaption><span class="klabel">Query filter — “revenue forecasts”</span><span class="note">others fade to 15% · hits pulse once</span></figcaption>
+        <div class="frame-body">
+          <div class="mini-stage">
+          <svg width="640" height="320" viewBox="0 0 640 320">
+            <path d="M175 120 C240 85, 300 78, 375 95" fill="none" stroke="var(--sig-sem)" stroke-width="3.5" stroke-opacity=".7" stroke-linecap="round"/>
+            <path d="M175 120 C230 170, 290 205, 360 225" fill="none" stroke="var(--sig-top)" stroke-width="1.5" stroke-opacity=".08" stroke-linecap="round"/>
+            <path d="M375 95 C420 140, 430 180, 400 230" fill="none" stroke="var(--sig-ent)" stroke-width="2" stroke-opacity=".08" stroke-linecap="round"/>
+          </svg>
+          <div class="node m t1 demo-pulse" style="left:87px; top:94px;">
+            <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+            <span class="n-text"><span class="n-name">Q3-Financials.pdf</span><span class="n-meta">PDF · 1.8 MB</span></span>
+          </div>
+          <div class="node m t1" style="left:300px; top:69px;">
+            <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+            <span class="n-text"><span class="n-name">market-analysis.docx</span><span class="n-meta">DOCX · 640 KB</span></span>
+          </div>
+          <div class="node s t7" style="left:285px; top:203px; opacity:.15;">
+            <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+            <span class="n-text"><span class="n-name">notes-meeting.md</span><span class="n-meta">MD · 12 KB</span></span>
+          </div>
+          <div class="node s t4" style="left:430px; top:210px; opacity:.15;">
+            <span class="n-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+            <span class="n-text"><span class="n-name">user-interviews.txt</span><span class="n-meta">TXT · 210 KB</span></span>
+          </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- EXPLANATION CARD VARIANTS -->
+      <figure class="frame">
+        <figcaption><span class="klabel">ExplanationCard — variants</span><span class="note">LLM · template · loading</span></figcaption>
+        <div class="frame-body plain" style="display:flex; flex-direction:column; gap:14px;">
+          <div class="exp-card">
+            <span class="exp-badge llm"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 9.6 6 14 7.5 9.6 9 8 13.5 6.4 9 2 7.5 6.4 6z"/></svg>Local LLM</span>
+            <p>These documents are linked primarily by meaning. Both analyze Q3 revenue contraction in the EMEA mid-market…</p>
+          </div>
+          <div class="exp-card" style="background:var(--sunken); border-color:var(--border);">
+            <span class="exp-badge tpl">Template</span>
+            <p>Strong semantic overlap (0.44) with 6 shared entities. Top shared concepts: Acme Corp, ARR, churn rate.</p>
+          </div>
+          <div class="exp-card loading">
+            <span class="exp-badge llm"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 9.6 6 14 7.5 9.6 9 8 13.5 6.4 9 2 7.5 6.4 6z"/></svg>Local LLM</span>
+            <p></p>
+            <div class="sk-line" style="margin-top:2px"></div>
+            <div class="sk-line"></div>
+            <div class="sk-line w60"></div>
+          </div>
+        </div>
+      </figure>
+
+    </div>
+  </div>
+</section>
+
+<script>
+/* Demo-only wiring. All visual truth lives in the CSS classes above. */
+(function(){
+  var app   = document.getElementById('app');
+  var edgeP = document.getElementById('edgePanel');
+  var nodeP = document.getElementById('nodePanel');
+  var input = document.getElementById('searchInput');
+  var btns  = document.querySelectorAll('.demo-bar button');
+
+  function setState(s){
+    app.classList.toggle('panel-open', s === 'edge' || s === 'node');
+    app.classList.remove('query-mode');           // remove first so pulse restarts
+    edgeP.classList.toggle('open', s === 'edge');
+    nodeP.classList.toggle('open', s === 'node');
+    if (s === 'query'){
+      void app.offsetWidth;                       // reflow → re-trigger pulse-once
+      app.classList.add('query-mode');
+      input.value = 'revenue forecasts';
+    } else {
+      input.value = '';
+    }
+    btns.forEach(function(b){ b.classList.toggle('on', b.dataset.state === s); });
+  }
+
+  btns.forEach(function(b){
+    b.addEventListener('click', function(){ setState(b.dataset.state); });
+  });
+  document.querySelectorAll('[data-close]').forEach(function(b){
+    b.addEventListener('click', function(){ setState('clean'); });
+  });
+})();
+</script>
+</body>
+</html>
