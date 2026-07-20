@@ -150,3 +150,7 @@ cd frontend && npx vitest run   # 17 tests
 | 4 | Graph UI (react-flow + d3-force) + local-LLM edge explanations | ✅ |
 | 5 | Query-scoped subgraph + Ask-the-Corpus with verified citations | ✅ |
 | 6 | Docs, screenshots, docker, final polish | ✅ |
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
